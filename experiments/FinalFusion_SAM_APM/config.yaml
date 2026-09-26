@@ -1,0 +1,28 @@
+# 実験条件の定義。フォルダを増やせば条件が増える。
+# 重みは dc5-data/weights/<name>/ にあり、ここには置かない。
+name: FinalFusion_SAM_APM
+arch: MultiEncoderUNet
+family: Final
+terrain: SAM
+use_airphoto: true
+augment: false
+bg_ratio: 0.0
+status: active
+label: ''
+note: ''
+dataset:
+  Hiroshima: hiroshima_sam_apm.pkl
+  Shimane: shimane_sam_apm.pkl
+train:
+  epochs: 1000
+  batch_size: 32
+  lr: 0.0001
+  seed: 42
+  split: 6:2:2 (train_test_split test_size=0.2 -> 0.25, random_state=42)
+  model_selection: 検証データのF値が最良のエポック
+  loss:
+    type: focal_tversky
+    alpha: 0.7
+    beta: 0.3
+    gamma: 0.75
+  augment_params: null

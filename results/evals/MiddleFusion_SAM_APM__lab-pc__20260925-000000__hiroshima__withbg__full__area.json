@@ -1,0 +1,18 @@
+{
+ "condition": "MiddleFusion_SAM_APM",
+ "eval_id": "MiddleFusion_SAM_APM__lab-pc__20260925-000000__hiroshima__withbg__full__area",
+ "evaluated_at": "2026-09-26T00:00:00",
+ "f1": 0.6034,
+ "machine": "SomanoMacBook-Air",
+ "metric_kind": "面積",
+ "n_tiles": "7631",
+ "note": "テスト集合の作り方を地域間で揃えた集計",
+ "precision": 0.5308,
+ "recall": 0.699,
+ "region": "hiroshima",
+ "run_id": "MiddleFusion_SAM_APM__lab-pc__20260925-000000",
+ "scope": "通常",
+ "setting": "",
+ "tileset": "背景込み",
+ "weights_sha256": "f26e69a939645e642eb929561ff5e7782d2a262063e7db2042d1765583a11b59"
+}

@@ -1,0 +1,43 @@
+{
+ "arch": "MultiEncoderUNet",
+ "augment": true,
+ "best_epoch": 897,
+ "best_val_f1": 0.6941,
+ "bg_ratio": 0.0,
+ "condition": "DataOgument_FinalFusion_DEM_APM",
+ "dataset": {
+  "Hiroshima": "hiroshima_dem_apm_normalized.pkl",
+  "Shimane": "shimane_dem_apm_normalized.pkl"
+ },
+ "epochs_run": 1000,
+ "machine": "lab-pc",
+ "note": "既存の学習結果を移行時に記録したもの。学習日時と乱数状態は当時の記録が無い",
+ "recorded_at": "2026-09-26T23:52:22",
+ "run_id": "DataOgument_FinalFusion_DEM_APM__lab-pc__20260925-000000",
+ "train": {
+  "augment_params": {
+   "hflip": true,
+   "rotation_deg": 15,
+   "scale_range": [
+    0.8,
+    1.2
+   ],
+   "translate": 0.1,
+   "vflip": true
+  },
+  "batch_size": 32,
+  "epochs": 1000,
+  "loss": {
+   "alpha": 0.7,
+   "beta": 0.3,
+   "gamma": 0.75,
+   "type": "focal_tversky"
+  },
+  "lr": 0.0001,
+  "model_selection": "検証データのF値が最良のエポック",
+  "seed": 42,
+  "split": "6:2:2 (train_test_split test_size=0.2 -> 0.25, random_state=42)"
+ },
+ "trained_at": "2026-09（正確な日時は未記録）",
+ "weights_sha256": "ac79670a558885a74a1a9df7091d57c04a822212d88014a86ac03a924a3da324"
+}

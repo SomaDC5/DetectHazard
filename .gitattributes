@@ -1,0 +1,18 @@
+# Ubuntu と Windows を行き来するので、改行コードを LF に固定する。
+# これを入れないと、OS をまたぐたびに全行が差分として出る。
+* text=auto eol=lf
+
+*.py    text eol=lf
+*.ipynb text eol=lf
+*.csv   text eol=lf
+*.json  text eol=lf
+*.yaml  text eol=lf
+*.md    text eol=lf
+*.sh    text eol=lf
+
+*.pth   binary
+*.pkl   binary
+*.png   binary
+*.jpg   binary
+*.docx  binary
+*.pptx  binary

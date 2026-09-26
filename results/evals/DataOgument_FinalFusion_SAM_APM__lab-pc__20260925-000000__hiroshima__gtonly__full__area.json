@@ -1,0 +1,18 @@
+{
+ "condition": "DataOgument_FinalFusion_SAM_APM",
+ "eval_id": "DataOgument_FinalFusion_SAM_APM__lab-pc__20260925-000000__hiroshima__gtonly__full__area",
+ "evaluated_at": "2026-09-26T00:00:00",
+ "f1": 0.6974,
+ "machine": "SomanoMacBook-Air",
+ "metric_kind": "面積",
+ "n_tiles": 2964.0,
+ "note": "tileanalysis による再推論。ノートブック出力と F値 0.0001 以内で一致",
+ "precision": 0.68,
+ "recall": 0.7157,
+ "region": "hiroshima",
+ "run_id": "DataOgument_FinalFusion_SAM_APM__lab-pc__20260925-000000",
+ "scope": "通常",
+ "setting": "",
+ "tileset": "警戒のみ",
+ "weights_sha256": "474f0d1c3b1eb2c3fcd0745ddb30a97de16db2db2935ecb12b1befca47dbd83f"
+}

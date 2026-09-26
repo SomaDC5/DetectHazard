@@ -1,0 +1,18 @@
+{
+ "condition": "AttentionUNet_SAM_APM",
+ "eval_id": "AttentionUNet_SAM_APM__lab-pc__20260925-000000__shimane__all__center__area",
+ "evaluated_at": "2026-09-26T00:00:00",
+ "f1": 0.5675,
+ "machine": "SomanoMacBook-Air",
+ "metric_kind": "面積",
+ "n_tiles": 24569.0,
+ "note": "tileanalysis による再推論。ノートブック出力と F値 0.0001 以内で一致",
+ "precision": 0.5553,
+ "recall": 0.5803,
+ "region": "shimane",
+ "run_id": "AttentionUNet_SAM_APM__lab-pc__20260925-000000",
+ "scope": "境界",
+ "setting": "",
+ "tileset": "全件",
+ "weights_sha256": "28c822293ca91638868495ddcc40c10f499f2fe378d8c6051daaebe578647bf0"
+}
