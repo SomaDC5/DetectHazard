@@ -1,0 +1,19 @@
+{
+ "condition": "DataOgument_FinalFusion_DEM_APM",
+ "eval_id": "DataOgument_FinalFusion_DEM_APM__lab-pc__20260925-000000__hiroshima__gtonly__full__inst__IoU--1--0.3-635d05",
+ "evaluated_at": "2026-09-26T00:00:00",
+ "f1": 0.552,
+ "machine": "SomanoMacBook-Air",
+ "metric_kind": "箇所",
+ "n_gt_instances": "8977",
+ "n_pred_instances": "9829",
+ "note": "連結性8近傍 / 最小サイズ10px / 二値化0.5",
+ "precision": 0.5259,
+ "recall": 0.5808,
+ "region": "hiroshima",
+ "run_id": "DataOgument_FinalFusion_DEM_APM__lab-pc__20260925-000000",
+ "scope": "通常",
+ "setting": "IoU多対1 (0.3)",
+ "tileset": "警戒のみ",
+ "weights_sha256": "ac79670a558885a74a1a9df7091d57c04a822212d88014a86ac03a924a3da324"
+}

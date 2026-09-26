@@ -1,0 +1,34 @@
+{
+ "arch": "TransUNetDual",
+ "augment": false,
+ "best_epoch": 52,
+ "best_val_f1": 0.67,
+ "bg_ratio": 0.0,
+ "condition": "TransUNet_SAM_APM",
+ "dataset": {
+  "Hiroshima": "hiroshima_sam_apm.pkl",
+  "Shimane": "shimane_sam_apm.pkl"
+ },
+ "epochs_run": 1000,
+ "machine": "lab-pc",
+ "note": "既存の学習結果を移行時に記録したもの。学習日時と乱数状態は当時の記録が無い",
+ "recorded_at": "2026-09-26T23:52:22",
+ "run_id": "TransUNet_SAM_APM__lab-pc__20260925-000000",
+ "train": {
+  "augment_params": null,
+  "batch_size": 32,
+  "epochs": 1000,
+  "loss": {
+   "alpha": 0.7,
+   "beta": 0.3,
+   "gamma": 0.75,
+   "type": "focal_tversky"
+  },
+  "lr": 0.0001,
+  "model_selection": "検証データのF値が最良のエポック",
+  "seed": 42,
+  "split": "6:2:2 (train_test_split test_size=0.2 -> 0.25, random_state=42)"
+ },
+ "trained_at": "2026-09（正確な日時は未記録）",
+ "weights_sha256": "694c82a44fea2c209eba444d77744e8a5e24b6ff0d133fdf33b537f08f0c5f59"
+}

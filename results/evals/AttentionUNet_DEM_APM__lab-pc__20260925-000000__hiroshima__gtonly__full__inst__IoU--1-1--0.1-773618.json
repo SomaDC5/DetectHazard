@@ -1,0 +1,19 @@
+{
+ "condition": "AttentionUNet_DEM_APM",
+ "eval_id": "AttentionUNet_DEM_APM__lab-pc__20260925-000000__hiroshima__gtonly__full__inst__IoU--1-1--0.1-773618",
+ "evaluated_at": "2026-09-26T00:00:00",
+ "f1": 0.6288,
+ "machine": "SomanoMacBook-Air",
+ "metric_kind": "箇所",
+ "n_gt_instances": "8977",
+ "n_pred_instances": "7954",
+ "note": "連結性8近傍 / 最小サイズ10px / 二値化0.5",
+ "precision": 0.6692,
+ "recall": 0.593,
+ "region": "hiroshima",
+ "run_id": "AttentionUNet_DEM_APM__lab-pc__20260925-000000",
+ "scope": "通常",
+ "setting": "IoU厳密1対1 (0.1)",
+ "tileset": "警戒のみ",
+ "weights_sha256": "3660789e60d9332ebe7a07a6d753bfd084332593da21377611455eb1ac3bcf9c"
+}

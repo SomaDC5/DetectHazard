@@ -1,0 +1,37 @@
+# 評価に使う地域の定義。地域を増やすときはここに1つ足す。
+# key         コード中で使う識別子（小文字・英数字）
+# dir         dc5-data/datasets/ 以下のフォルダ名
+# label       図表に出す日本語
+# role        train  … 学習に使う（ホールドアウトを切る）
+#             eval   … 評価専用（全タイルを使う）
+# subset      all      … その地域の全タイル
+#             holdout  … 警戒区域を含むタイルの2割（学習時と同じ分割）
+#             background … 警戒区域を含まないタイル
+regions:
+  hiroshima:
+    dir: Hiroshima
+    label: 広島
+    role: train
+    subset: holdout
+    note: 学習に使った県。テストは警戒区域を含むタイルのホールドアウト2,964枚
+
+  hiroshima_bg:
+    dir: Hiroshima
+    label: 広島（背景タイル）
+    role: train
+    subset: background
+    note: 警戒区域を1画素も含まないタイル23,332枚。学習には未使用
+
+  shimane:
+    dir: Shimane
+    label: 島根
+    role: eval
+    subset: all
+    note: 学習に一切使っていない県。全24,569枚
+
+# 地域を増やす例（データセットを dc5-data/datasets/Okayama/ に置いてから）
+#  okayama:
+#    dir: Okayama
+#    label: 岡山
+#    role: eval
+#    subset: all

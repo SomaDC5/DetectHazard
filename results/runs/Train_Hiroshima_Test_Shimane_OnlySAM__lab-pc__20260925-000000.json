@@ -1,0 +1,34 @@
+{
+ "arch": "UNet",
+ "augment": false,
+ "best_epoch": 52,
+ "best_val_f1": 0.5688,
+ "bg_ratio": 0.0,
+ "condition": "Train_Hiroshima_Test_Shimane_OnlySAM",
+ "dataset": {
+  "Hiroshima": "hiroshima_sam.pkl",
+  "Shimane": "shimane_sam.pkl"
+ },
+ "epochs_run": 100,
+ "machine": "lab-pc",
+ "note": "既存の学習結果を移行時に記録したもの。学習日時と乱数状態は当時の記録が無い",
+ "recorded_at": "2026-09-26T23:52:22",
+ "run_id": "Train_Hiroshima_Test_Shimane_OnlySAM__lab-pc__20260925-000000",
+ "train": {
+  "augment_params": null,
+  "batch_size": 32,
+  "epochs": 100,
+  "loss": {
+   "alpha": 0.7,
+   "beta": 0.3,
+   "gamma": 0.75,
+   "type": "focal_tversky"
+  },
+  "lr": 0.0001,
+  "model_selection": "テストデータのF値が最良のエポック（デュアル入力条件と条件が揃っていない）",
+  "seed": 42,
+  "split": "8:2 (train_test_split test_size=0.2, random_state=42) 検証分割なし"
+ },
+ "trained_at": "2026-09（正確な日時は未記録）",
+ "weights_sha256": "ca51a1c81680acce5ac78c8853ef3237a192703ade54bb2f71f262732fb8f714"
+}

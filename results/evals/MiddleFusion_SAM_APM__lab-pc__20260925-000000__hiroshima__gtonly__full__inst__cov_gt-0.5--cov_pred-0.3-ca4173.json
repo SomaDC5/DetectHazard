@@ -1,0 +1,19 @@
+{
+ "condition": "MiddleFusion_SAM_APM",
+ "eval_id": "MiddleFusion_SAM_APM__lab-pc__20260925-000000__hiroshima__gtonly__full__inst__cov_gt-0.5--cov_pred-0.3-ca4173",
+ "evaluated_at": "2026-09-26T00:00:00",
+ "f1": 0.6547,
+ "machine": "SomanoMacBook-Air",
+ "metric_kind": "箇所",
+ "n_gt_instances": "8977",
+ "n_pred_instances": "8222",
+ "note": "連結性8近傍 / 最小サイズ10px / 二値化0.5",
+ "precision": 0.6683,
+ "recall": 0.6416,
+ "region": "hiroshima",
+ "run_id": "MiddleFusion_SAM_APM__lab-pc__20260925-000000",
+ "scope": "通常",
+ "setting": "被覆 (cov_gt=0.5, cov_pred=0.3)",
+ "tileset": "警戒のみ",
+ "weights_sha256": "f26e69a939645e642eb929561ff5e7782d2a262063e7db2042d1765583a11b59"
+}

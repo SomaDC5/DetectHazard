@@ -1,0 +1,19 @@
+# conda env create -f environment.yml
+# Windows(mayo環境) / Ubuntu / macOS で同じものを再現するための定義。
+# PyTorch は CUDA の有無で入れ分けるため、ここには含めない。
+#   CUDA あり: conda install pytorch pytorch-cuda=12.1 -c pytorch -c nvidia
+#   CPU / Apple Silicon: pip install torch
+name: dc5
+channels: [conda-forge]
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas
+  - scipy
+  - scikit-learn
+  - matplotlib
+  - pyyaml
+  - tqdm
+  - opencv
+  - jupyterlab
+  - ipykernel

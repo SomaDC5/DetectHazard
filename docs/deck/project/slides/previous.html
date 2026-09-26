@@ -1,0 +1,10 @@
+<section id="previous" data-transition="fade" style="background:#EAEBE5; color:#1E2C37; font-family:'Noto Sans JP', sans-serif; padding:128px 128px 160px; display:flex; flex-direction:column; gap:40px">
+  <p style="font-family:'Zen Kaku Gothic New', 'Noto Sans JP', sans-serif; font-size:24px; font-weight:700; letter-spacing:2px; color:#C0662A">PREVIOUS WORK</p>
+  <h2 style="font-family:'Zen Kaku Gothic New', 'Noto Sans JP', sans-serif; font-size:52px; font-weight:700; line-height:1.15; color:#16232E">前回までの到達点と、残っていた課題</h2>
+  <p style="font-size:28px; color:#4F5E69; line-height:1.6">SCIS&amp;ISIS 2026 投稿論文：広島県のデータで、入力4条件（DEM / SAM / DEM+APM / SAM+APM）を比較した。</p>
+  <div style="display:flex; gap:28px"><div style="flex:1; display:flex; flex-direction:column; gap:12px; background:#FFFFFF; padding:32px; border:1px solid #D6D6CE; border-radius:14px"><h3 style="font-family:'Zen Kaku Gothic New', 'Noto Sans JP', sans-serif; font-size:30px; font-weight:700; color:#2D6E8E">分かったこと</h3><ul style="font-size:26px; line-height:1.65; color:#4F5E69"><li>航空写真（APM）の併用で全条件が改善</li><li>SAM+APM が最良（F値 0.6497）</li><li>境界16pxを除くと全条件で F値が向上 → U-Net の周縁部劣化を確認</li></ul></div><div style="flex:1; display:flex; flex-direction:column; gap:12px; background:#FFFFFF; padding:32px; border:1px solid #D6D6CE; border-radius:14px"><h3 style="font-family:'Zen Kaku Gothic New', 'Noto Sans JP', sans-serif; font-size:30px; font-weight:700; color:#C0662A">残った課題</h3><ul style="font-size:26px; line-height:1.65; color:#4F5E69"><li>デュアル入力の<b>結合位置</b>を検討していない</li><li><b>データ拡張</b>を導入していない</li><li>広島県内のみ。<b>他県で使えるか未検証</b></li><li>Attention / Transformer などの構造が未検討</li></ul></div></div>
+  <p style="position:absolute; left:128px; bottom:64px; width:1664px; font-size:24px; color:#4F5E69"><span style="color:#4F5E69">前回：Kaya et al., SCIS&amp;ISIS 2026（投稿）</span></p>
+  <p style="position:absolute; right:128px; bottom:64px; width:120px; text-align:right; font-size:24px; color:#4F5E69">3</p>
+
+  <aside>前回の論文で残した「今後の課題」が、そのまま今回の実験項目になっています。論文の結論部で挙げた3点、拡張・構造改良・汎化のうち、今回は全部に手をつけました。</aside>
+</section>

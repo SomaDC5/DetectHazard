@@ -1,0 +1,19 @@
+{
+ "condition": "TransUNet_SAM_APM",
+ "eval_id": "TransUNet_SAM_APM__lab-pc__20260925-000000__shimane__all__full__inst__IoU--1--0.1-b5e5ab",
+ "evaluated_at": "2026-09-26T00:00:00",
+ "f1": 0.5246,
+ "machine": "SomanoMacBook-Air",
+ "metric_kind": "箇所",
+ "n_gt_instances": "27445",
+ "n_pred_instances": "29317",
+ "note": "連結性8近傍 / 最小サイズ10px / 二値化0.5",
+ "precision": 0.4966,
+ "recall": 0.556,
+ "region": "shimane",
+ "run_id": "TransUNet_SAM_APM__lab-pc__20260925-000000",
+ "scope": "通常",
+ "setting": "IoU多対1 (0.1)",
+ "tileset": "全件",
+ "weights_sha256": "694c82a44fea2c209eba444d77744e8a5e24b6ff0d133fdf33b537f08f0c5f59"
+}

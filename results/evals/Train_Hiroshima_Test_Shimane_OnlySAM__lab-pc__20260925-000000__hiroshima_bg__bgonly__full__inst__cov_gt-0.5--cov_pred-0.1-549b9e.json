@@ -1,0 +1,19 @@
+{
+ "condition": "Train_Hiroshima_Test_Shimane_OnlySAM",
+ "eval_id": "Train_Hiroshima_Test_Shimane_OnlySAM__lab-pc__20260925-000000__hiroshima_bg__bgonly__full__inst__cov_gt-0.5--cov_pred-0.1-549b9e",
+ "evaluated_at": "2026-09-26T00:00:00",
+ "f1": 0.0,
+ "machine": "SomanoMacBook-Air",
+ "metric_kind": "箇所",
+ "n_gt_instances": "0",
+ "n_pred_instances": "17758",
+ "note": "連結性8近傍 / 最小サイズ10px / 二値化0.5",
+ "precision": 0.0,
+ "recall": null,
+ "region": "hiroshima_bg",
+ "run_id": "Train_Hiroshima_Test_Shimane_OnlySAM__lab-pc__20260925-000000",
+ "scope": "通常",
+ "setting": "被覆 (cov_gt=0.5, cov_pred=0.1)",
+ "tileset": "背景のみ",
+ "weights_sha256": "ca51a1c81680acce5ac78c8853ef3237a192703ade54bb2f71f262732fb8f714"
+}

@@ -1,0 +1,11 @@
+<section id="qualitative" data-transition="fade" style="background:#F6F5F1; color:#1E2C37; font-family:'Noto Sans JP', sans-serif; padding:128px 128px 160px; display:flex; flex-direction:column; gap:40px">
+  <h2 style="font-family:'Zen Kaku Gothic New', 'Noto Sans JP', sans-serif; font-size:52px; font-weight:700; line-height:1.15; color:#16232E">抽出結果の例（拡張 + Attention, SAM+APM / 広島テスト）</h2>
+  <div style="display:flex; gap:20px"><p style="flex:1; font-size:26px; font-weight:700; color:#1E2C37; text-align:center">入力 ① 傾斜角マップ（SAM）</p><p style="flex:1; font-size:26px; font-weight:700; color:#1E2C37; text-align:center">入力 ② 航空写真（APM）</p><p style="flex:1; font-size:26px; font-weight:700; color:#1E2C37; text-align:center">正解マスク</p><p style="flex:1; font-size:26px; font-weight:700; color:#1E2C37; text-align:center">抽出結果</p></div>
+  <img src="/_blob/e0d76417ff3d9457b4778bb409109649" alt="例1：傾斜角マップ、航空写真、正解マスク、抽出結果の比較" style="width:1664px; height:300px; object-fit:contain">
+  <img src="/_blob/458a2223dde4c3bffe626a85a01b7950" alt="例2：傾斜角マップ、航空写真、正解マスク、抽出結果の比較" style="width:1664px; height:300px; object-fit:contain">
+  <p style="font-size:26px; color:#4F5E69; line-height:1.55">位置と形はおおむね一致する。一方で、正解より広めに取る傾向と、タイル端に現れる小さな取りこぼし・張り出しが残る。</p>
+  <p style="position:absolute; left:128px; bottom:64px; width:1664px; font-size:24px; color:#4F5E69"></p>
+  <p style="position:absolute; right:128px; bottom:64px; width:120px; text-align:right; font-size:24px; color:#4F5E69">21</p>
+
+  <aside>定性的に見ると、位置はよく当たっています。ただ正解より広めに出る傾向があり、これは Recall 重視の損失設定の影響でもあります。現地調査の当たりをつける用途なら、広めに出るのはむしろ許容できる方向だと考えています。</aside>
+</section>
