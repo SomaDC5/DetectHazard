@@ -15,7 +15,7 @@ import pandas as pd
 import torch
 
 from . import config
-from .models import build_model, load_weights
+from dc5lib.models import build_model, load_weights
 
 
 def pick_device(name=None):

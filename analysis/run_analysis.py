@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
-from tileanalysis import analyze, config  # noqa: E402
+from analysis import analyze, config  # noqa: E402
 
 plt.rcParams["font.family"] = ["Hiragino Sans", "BIZ UDGothic", "sans-serif"]
 plt.rcParams["axes.unicode_minus"] = False

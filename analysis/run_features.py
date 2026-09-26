@@ -12,7 +12,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tileanalysis import config, features  # noqa: E402
+from analysis import config, features  # noqa: E402
 
 
 def main():

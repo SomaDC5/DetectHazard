@@ -16,9 +16,12 @@ import pandas as pd
 from scipy import ndimage
 
 from . import config
+from dc5lib import regions as _regions
 from .data import (load_pkl, preprocess_mask, hiroshima_test_indices,
                     background_holdout_indices)
 
+# 地形の特徴量は傾斜角(度)で出したいので、SAM の pkl を使う。
+# 地域を増やしたら、その地域の SAM pkl を1行足す。
 FEATURE_PKL = {
     "hiroshima": "hiroshima_sam.pkl",
     "hiroshima_bg": "hiroshima_sam.pkl",
@@ -67,10 +70,11 @@ def build_features(region, verbose=True):
     n_all = len(ds.No)
 
     holdout = None
-    if region == "hiroshima":
+    subset = _regions.get(region).subset if region in _regions.keys() else "all"
+    if subset == "holdout":
         keep = [i for i in range(n_all) if np.max(np.asarray(ds.Mask[i])) >= 1]
         sel = [keep[i] for i in sorted(hiroshima_test_indices(len(keep)))]
-    elif region == "hiroshima_bg":
+    elif subset == "background":
         sel = [i for i in range(n_all) if np.max(np.asarray(ds.Mask[i])) < 1]
         holdout = set(background_holdout_indices(len(sel)).tolist())
     else:

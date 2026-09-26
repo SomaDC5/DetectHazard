@@ -1,10 +1,25 @@
 # 実験条件の定義。フォルダを増やせば条件が増える。
 # 重みは dc5-data/weights/<name>/ にあり、ここには置かない。
+# inputs を増やせば3入力以上にできる（モデル側の実装も必要）。
 name: Triple_UNet_SAM_APM_GEO
 arch: TripleEncoderUNet
 family: Triple
-terrain: SAM
-use_airphoto: true
+inputs:
+- key: terrain
+  source: SAM
+  channels: 1
+  field: DEM
+  note: 傾斜角マップ(度)
+- key: airphoto
+  source: APM
+  channels: 3
+  field: AirPhoto
+  note: 航空写真 RGB
+- key: geology
+  source: GEO
+  channels: 3
+  field: Geo
+  note: 地質図。pkl内の属性名は要確認
 augment: false
 bg_ratio: 0.0
 status: excluded

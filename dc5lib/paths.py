@@ -179,6 +179,11 @@ def results_dir(*parts) -> Path:
     return p
 
 
+def curve_path(condition: str) -> Path:
+    """学習曲線（旧 losses.csv）。リポジトリ側の results/curves に置く。"""
+    return results_dir("curves") / f"{condition}.csv"
+
+
 def machine_name() -> str:
     """結果に記録する機械名。環境変数 DC5_MACHINE があればそれを使う。"""
     import platform

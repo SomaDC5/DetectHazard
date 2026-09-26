@@ -21,8 +21,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd  # noqa: E402
 
-from tileanalysis import config, infer  # noqa: E402
-from tileanalysis.data import build_tileset  # noqa: E402
+from analysis import config, infer  # noqa: E402
+from analysis.data import build_tileset  # noqa: E402
 
 
 def load_reference():

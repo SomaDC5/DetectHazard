@@ -24,20 +24,63 @@ from . import paths
 
 
 @dataclass
+class Input:
+    """モデルに入れる1つの入力。
+
+    key      forward() に渡す順序を決める識別子（terrain / airphoto / geology ...）
+    source   何のデータか（DEM / SAM / APM / GEO ...）
+    channels チャネル数（DEM・SAMは1、航空写真は3）
+    field    pkl の中の属性名。省略時は key から推定
+    """
+    key: str
+    source: str
+    channels: int = 1
+    field: str = ""
+    note: str = ""
+
+    def __post_init__(self):
+        if not self.field:
+            self.field = {"terrain": "DEM", "airphoto": "AirPhoto"}.get(self.key, self.key)
+
+
+@dataclass
 class Condition:
     name: str
     arch: str                       # 実装クラス名
     family: str                     # Single / Early / Middle / Final / Attention / Transformer / Triple
-    terrain: str                    # DEM / SAM
-    use_airphoto: bool
     augment: bool
-    bg_ratio: float
     dataset: dict                   # {"Hiroshima": "xxx.pkl", "Shimane": "yyy.pkl"}
     train: dict
+    inputs: list = field(default_factory=list)   # [Input, ...]
+    terrain: str = ""               # inputs から導出（互換のため残す）
+    use_airphoto: bool = False      # 同上
+    bg_ratio: float = 0.0
     status: str = "active"          # active / excluded
     note: str = ""
     label: str = ""
     dir: Path = field(default=None, repr=False)
+
+    def __post_init__(self):
+        # inputs が書かれていなければ、旧来の terrain / use_airphoto から組み立てる
+        if not self.inputs:
+            self.inputs = [Input(key="terrain", source=self.terrain or "DEM", channels=1)]
+            if self.use_airphoto:
+                self.inputs.append(Input(key="airphoto", source="APM", channels=3))
+        else:
+            self.inputs = [i if isinstance(i, Input) else Input(**i) for i in self.inputs]
+        # 逆に inputs から terrain / use_airphoto を埋め直す（表示や層別で使う）
+        for i in self.inputs:
+            if i.key == "terrain":
+                self.terrain = i.source
+        self.use_airphoto = any(i.key == "airphoto" for i in self.inputs)
+
+    @property
+    def n_inputs(self) -> int:
+        return len(self.inputs)
+
+    @property
+    def in_channels(self) -> list:
+        return [i.channels for i in self.inputs]
 
     @property
     def weights(self) -> Path:
@@ -47,8 +90,18 @@ class Condition:
     def checkpoint(self) -> Path:
         return paths.data_root() / "checkpoints" / self.name / "model_checkpoint.pth"
 
-    def pkl(self, region: str) -> Path:
-        return paths.dataset_path(region, self.dataset[region])
+    def pkl_for(self, region_dir: str) -> Path:
+        """region_dir は regions.yaml の dir（'Hiroshima' など）。"""
+        if region_dir not in self.dataset:
+            raise KeyError(
+                f"{self.name} に {region_dir} のデータセットが定義されていません。"
+                f"config.yaml の dataset に追加してください。"
+                f"（定義済み: {list(self.dataset)}）")
+        return paths.dataset_path(region_dir, self.dataset[region_dir])
+
+    # 旧名
+    def pkl(self, region_dir: str) -> Path:
+        return self.pkl_for(region_dir)
 
     @property
     def dual(self) -> bool:
@@ -60,7 +113,10 @@ class Condition:
         fam = {"Single": "単一入力", "Early": "Early", "Middle": "Middle", "Final": "Final",
                "Attention": "Attention", "Transformer": "TransUNet",
                "Triple": "Triple"}.get(self.family, self.family)
-        inputs = self.terrain + ("+APM" if self.use_airphoto else " のみ")
+        if self.n_inputs == 1:
+            inputs = self.inputs[0].source + " のみ"
+        else:
+            inputs = "+".join(i.source for i in self.inputs)
         return f"{'拡張+' if self.augment else ''}{fam} {inputs}"
 
 
@@ -121,6 +177,21 @@ def check():
             problems.append(f"{n}: ノートブックがありません")
         for bad in paths.experiment_dir(n).glob("*.pth"):
             problems.append(f"{n}: 重みがリポジトリ内にあります — {bad.name} は dc5-data へ")
+
+        from . import regions as _regions
+        known = set(r.dir for r in _regions.all_regions())
+        for region in c.dataset:
+            if region not in known:
+                problems.append(f"{n}: dataset の地域 '{region}' が regions.yaml にありません")
+
+        if c.status == "active":
+            try:
+                from .models import MODEL_CLASSES
+                if c.arch not in MODEL_CLASSES:
+                    problems.append(f"{n}: モデルクラス {c.arch} が dc5lib/models.py に"
+                                    f"登録されていません")
+            except Exception:
+                pass
     return problems
 
 
@@ -137,10 +208,11 @@ if __name__ == "__main__":
 
     has_data = paths.data_root(required=False) is not None
     conds = load_all(include_excluded=True)
-    print(f"{'条件':<38}{'系統':<12}{'入力':<10}{'拡張':<5}{'重み':<6}{'状態'}")
+    print(f"{'条件':<38}{'系統':<12}{'入力':<16}{'ch':<8}{'拡張':<5}{'重み':<6}{'状態'}")
     for c in conds:
         w = ("あり" if c.weights.exists() else "無し") if has_data else "SSD未接続"
-        inputs = c.terrain + ("+APM" if c.use_airphoto else "")
-        print(f"{c.name:<38}{c.family:<12}{inputs:<10}"
+        inputs = "+".join(i.source for i in c.inputs)
+        ch = "+".join(str(i.channels) for i in c.inputs)
+        print(f"{c.name:<38}{c.family:<12}{inputs:<16}{ch:<8}"
               f"{'あり' if c.augment else '—':<5}{w:<6}{c.status}")
     print(f"\n計 {len(conds)} 条件（うち解析対象 {sum(1 for c in conds if c.status=='active')}）")

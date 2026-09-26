@@ -1,10 +1,20 @@
 # 実験条件の定義。フォルダを増やせば条件が増える。
 # 重みは dc5-data/weights/<name>/ にあり、ここには置かない。
+# inputs を増やせば3入力以上にできる（モデル側の実装も必要）。
 name: AttentionUNet_DEM_APM
 arch: AttentionMultiEncoderUNet
 family: Attention
-terrain: DEM
-use_airphoto: true
+inputs:
+- key: terrain
+  source: DEM
+  channels: 1
+  field: DEM
+  note: 標高（正規化済みpkl）
+- key: airphoto
+  source: APM
+  channels: 3
+  field: AirPhoto
+  note: 航空写真 RGB
 augment: false
 bg_ratio: 0.0
 status: active

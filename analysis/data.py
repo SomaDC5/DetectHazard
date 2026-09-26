@@ -22,6 +22,7 @@ from scipy.ndimage import gaussian_filter
 from sklearn.model_selection import train_test_split
 
 from . import config
+from dc5lib import regions as _regions
 
 
 # ------------------------------------------------------------------ pkl 読み込み
@@ -135,13 +136,17 @@ def build_tileset(pkl_path, region, need_airphoto, verbose=True):
     n_all = len(ds.No)
 
     flags = {}
-    if region == "hiroshima":
+    subset = _regions.get(region).subset if region in _regions.keys() else "all"
+
+    if subset == "holdout":
+        # 警戒区域を含むタイルだけを元の順序で残し、学習時と同じ分割のテスト側を取る
         keep = [i for i in range(n_all) if np.max(np.asarray(ds.Mask[i])) >= 1]
         test_pos = hiroshima_test_indices(len(keep))
         sel = [keep[i] for i in sorted(test_pos)]
         if verbose:
-            print(f"  全 {n_all} 枚 → 警戒区域あり {len(keep)} 枚 → テスト {len(sel)} 枚", flush=True)
-    elif region == "hiroshima_bg":
+            print(f"  全 {n_all} 枚 → 警戒区域あり {len(keep)} 枚 → テスト {len(sel)} 枚",
+                  flush=True)
+    elif subset == "background":
         # 警戒区域を1画素も含まないタイル。学習には一切使われていない。
         sel = [i for i in range(n_all) if np.max(np.asarray(ds.Mask[i])) < 1]
         hold = set(background_holdout_indices(len(sel)).tolist())
@@ -149,7 +154,7 @@ def build_tileset(pkl_path, region, need_airphoto, verbose=True):
         if verbose:
             print(f"  全 {n_all} 枚 → 背景タイル {len(sel)} 枚 "
                   f"（うちホールドアウト相当 {int(flags['bg_holdout'].sum())} 枚）", flush=True)
-    else:
+    else:                                   # subset == "all"
         sel = list(range(n_all))
         if verbose:
             print(f"  全 {n_all} 枚をそのまま使用", flush=True)
