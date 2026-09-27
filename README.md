@@ -98,12 +98,16 @@ DetectHazard/
 
 **フォルダを1つ作るだけ。** 中央の一覧を編集する必要はない。
 
+**学習コードを書く前に**、名前がかぶらないか確かめる。2台のPCで並行して
+作業するので、名前を決めるこの瞬間に確認しておくのがいちばん安い。
+
 ```bash
-mkdir experiments/MyNewModel_SAM_APM
-cp experiments/FinalFusion_SAM_APM/config.yaml experiments/MyNewModel_SAM_APM/
-# config.yaml の name と arch を直す。ノートブックを置く。
-python -m dc5lib.registry --check
+python tools/new_experiment.py MyNewModel_SAM_APM --from FinalFusion_SAM_APM
 ```
+
+ローカルにも他のリモートブランチにも同名が無いかを調べ、config.yaml と
+ノートブックの雛形を作る。そのあと **config.yaml だけ先に push して名前を予約**
+してから学習を始める（手順は `docs/使い方.md`）。
 
 新しいモデルクラスを使うなら `dc5lib/models.py` に追加して `MODEL_CLASSES` に登録する。
 
