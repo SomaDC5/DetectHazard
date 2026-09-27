@@ -5,11 +5,18 @@ SSDが2台あり、2台のPCで同時に学習を回す。放っておくと
 「どっちのSSDにどの重みがあるか分からない」状態になるので、
 各SSDに MANIFEST.csv（sha256つき）を持たせて照合する。
 
-    python -m dc5lib.sync verify              手元のSSDを検証し MANIFEST.csv を作り直す
-    python -m dc5lib.sync export              MANIFEST を results/ssd_manifests/ に写す
-    python -m dc5lib.sync diff  <他方のパス>   2台を突き合わせる（両方挿したとき）
-    python -m dc5lib.sync pull  <他方のパス>   足りないものだけコピーする
-    python -m dc5lib.sync status              git に載っている全SSDの在庫を表示
+    python -m dc5lib.sync verify              在庫表を更新（差分のみ再ハッシュ。--full で全件）
+    python -m dc5lib.sync check               在庫表が実ファイルとずれていないか
+    python -m dc5lib.sync export              在庫表を results/ssd_manifests/ に写す
+    python -m dc5lib.sync diff   <他方のパス>  2台を突き合わせる
+    python -m dc5lib.sync pull   <他方のパス>  他方にしか無いものを取り込む
+    python -m dc5lib.sync unify  <他方のパス>  ★ 2台を双方向に揃える（--run で実行）
+    python -m dc5lib.sync status              git上の在庫（SSDを挿さなくてよい）
+
+  共通オプション
+    --run            実際に実行する（既定は確認のみ）
+    --weights-only   チェックポイント(8.7GB)を除き、best_model.pth だけ揃える
+    --force          両方にあって中身が違うファイルも上書きする（既定は中止）
 
 MANIFEST を results/ssd_manifests/<ssd_id>.csv に写して git に載せておけば、
 **SSDを挿さなくても「どの重みがどちらにあるか」が分かる。**
@@ -28,7 +35,7 @@ from pathlib import Path
 from . import paths
 
 KINDS = ("weights", "checkpoints", "datasets")
-FIELDS = ["path", "size", "sha256", "kind"]
+FIELDS = ["path", "size", "mtime", "sha256", "kind"]
 
 
 def sha256(path: Path, buf: int = 8 << 20) -> str:
@@ -75,25 +82,61 @@ def human(n):
     return f"{n:.1f}PB"
 
 
-def verify(root: Path, rehash=True):
-    """実ファイルを走査して MANIFEST.csv を作り直し、旧版との差を報告する。"""
+def scan(root: Path):
+    """実ファイルを走査して {相対パス: (kind, size, mtime)} を返す。"""
+    out = {}
+    for kind, p in _targets(root):
+        st = p.stat()
+        out[str(p.relative_to(root)).replace("\\", "/")] = (kind, st.st_size, int(st.st_mtime))
+    return out
+
+
+def manifest_is_stale(root: Path):
+    """MANIFEST.csv と実ファイルがずれていないか。ずれているものを返す。
+
+    学習して重みが増えたのに verify を忘れると、同期で取りこぼす。
+    それを検出するための確認。
+    """
+    man, disk = read_manifest(root), scan(root)
+    added = [k for k in disk if k not in man]
+    removed = [k for k in man if k not in disk]
+    modified = [k for k in disk if k in man and
+                (int(man[k]["size"]) != disk[k][1] or
+                 str(man[k].get("mtime", "")) != str(disk[k][2]))]
+    return added, removed, modified
+
+
+def verify(root: Path, full=False):
+    """MANIFEST.csv を作り直す。
+
+    既定は差分のみ再ハッシュする（サイズか更新時刻が変わったファイルだけ）。
+    full=True で全件を計算し直す。
+    """
     old = read_manifest(root)
-    rows, changed, missing = [], [], []
+    disk = scan(root)
+    rows, changed, rehashed = [], [], 0
     t0, total = time.time(), 0
-    items = list(_targets(root))
-    for i, (kind, p) in enumerate(items, 1):
-        rel = str(p.relative_to(root)).replace("\\", "/")
-        size = p.stat().st_size
-        digest = sha256(p) if rehash else old.get(rel, {}).get("sha256", "")
-        rows.append({"path": rel, "size": size, "sha256": digest, "kind": kind})
-        if rel in old and old[rel]["sha256"] and digest and old[rel]["sha256"] != digest:
-            changed.append(rel)
-        total += size
-        print(f"  {i}/{len(items)}  {human(total)}", end="\r", flush=True)
-    seen = {r["path"] for r in rows}
-    missing = [k for k in old if k not in seen]
+    for i, (rel, (kind, size, mtime)) in enumerate(sorted(disk.items()), 1):
+        prev = old.get(rel)
+        unchanged = (prev and not full
+                     and int(prev["size"]) == size
+                     and str(prev.get("mtime", "")) == str(mtime)
+                     and prev.get("sha256"))
+        if unchanged:
+            digest = prev["sha256"]
+        else:
+            digest = sha256(root / rel)
+            rehashed += 1
+            total += size
+            if prev and prev.get("sha256") and prev["sha256"] != digest:
+                changed.append(rel)
+        rows.append({"path": rel, "size": size, "mtime": mtime,
+                     "sha256": digest, "kind": kind})
+        print(f"  {i}/{len(disk)}  再計算 {rehashed} 件 {human(total)}", end="\r", flush=True)
+    missing = [k for k in old if k not in disk]
     write_manifest(root, rows)
-    print(f"\n{len(rows)} 件 / {human(total)} / {time.time()-t0:.0f} 秒")
+    print(f"\n{len(rows)} 件（うち再計算 {rehashed} 件 / {human(total)}）"
+          f" / {time.time()-t0:.0f} 秒")
     if changed:
         print(f"  ! 中身が変わったファイル {len(changed)} 件: {changed[:5]}")
     if missing:
@@ -134,24 +177,92 @@ def diff(a: Path, b: Path):
     return only_a, only_b, diff_hash
 
 
-def pull(dst: Path, src: Path, dry_run=True):
-    """src にあって dst に無い（または中身が違う）ものをコピーする。"""
+def _check_fresh(root: Path, name: str):
+    """MANIFEST.csv が実ファイルとずれていたら警告して True を返す。"""
+    added, removed, modified = manifest_is_stale(root)
+    if added or removed or modified:
+        print(f"  ! {name} の在庫表が古いです"
+              f"（未登録 {len(added)} / 消失 {len(removed)} / 変更 {len(modified)}）")
+        for k in (added + modified)[:5]:
+            print(f"      {k}")
+        print(f"    先に  DC5_SSD_ID=<id> python -m dc5lib.sync verify  を実行してください。")
+        return True
+    return False
+
+
+def pull(dst: Path, src: Path, dry_run=True, kinds=None, force=False):
+    """src にあって dst に無いものをコピーする。
+
+    **両方にあって中身が違うファイルは、既定ではコピーしない。**
+    2台のPCで同じ名前の条件を学習してしまった場合、黙って上書きすると
+    片方の学習結果が消える。そういうファイルは一覧を出して止める。
+    """
+    stale = _check_fresh(src, "コピー元") | _check_fresh(dst, "コピー先")
     msrc, mdst = read_manifest(src), read_manifest(dst)
-    todo = [k for k in msrc
-            if k not in mdst or mdst[k]["sha256"] != msrc[k]["sha256"]]
-    size = sum(int(msrc[k]["size"]) for k in todo)
-    print(f"コピー対象 {len(todo)} 件 / {human(size)}")
-    for k in todo[:20]:
+    if kinds:
+        msrc = {k: v for k, v in msrc.items() if v["kind"] in kinds}
+
+    new_files = [k for k in msrc if k not in mdst]
+    conflicts = [k for k in msrc
+                 if k in mdst and mdst[k]["sha256"] != msrc[k]["sha256"]]
+
+    size = sum(int(msrc[k]["size"]) for k in new_files)
+    print(f"コピー対象（コピー先に無いもの）: {len(new_files)} 件 / {human(size)}")
+    for k in new_files[:20]:
         print("   ", k)
+    if len(new_files) > 20:
+        print(f"    … 他 {len(new_files)-20} 件")
+
+    if conflicts:
+        print(f"\n  !! 両方にあって中身が違うファイル: {len(conflicts)} 件")
+        for k in conflicts[:20]:
+            print(f"      {k}")
+        print("     同じ名前の条件を2台で別々に学習した可能性があります。")
+        print("     どちらを残すか決めてから、--force を付けるか、"
+              "片方の条件名を変えてください。")
+
+    todo = new_files + (conflicts if force else [])
+    if stale:
+        print("\n在庫表が古いので中止しました。")
+        return
     if dry_run:
-        print("--run を付けると実行します。")
+        print("\n--run を付けると実行します。")
+        return
+    if not todo:
+        print("\nコピーするものはありません。")
         return
     for i, k in enumerate(todo, 1):
-        s, d = src / k, dst / k
+        s_, d = src / k, dst / k
         d.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(s, d)
+        shutil.copy2(s_, d)
         print(f"  {i}/{len(todo)} {k}", flush=True)
-    print("完了。dst 側で verify を実行してください。")
+    print("完了。コピー先で verify を実行してください。")
+    return todo
+
+
+def unify(a: Path, b: Path, dry_run=True, kinds=None):
+    """2台のSSDの中身を揃える。両方向にコピーする。
+
+    2台のPCで別々のモデルを学習したあと、これ1回で双方向に揃う。
+    同じ名前の条件を両方で学習していた場合は、コピーせずに一覧を出す。
+    """
+    print("=== 1/3  両方の在庫表を更新 ===")
+    for root, name in ((a, "A側"), (b, "B側")):
+        print(f"  [{name}] {root}")
+        verify(root)
+    print("\n=== 2/3  A → B ===")
+    copied = pull(b, a, dry_run=dry_run, kinds=kinds)
+    if copied and not dry_run:
+        # コピーした直後は B の在庫表が古くなるので、次の向きの前に更新する
+        verify(b)
+    print("\n=== 3/3  B → A ===")
+    pull(a, b, dry_run=dry_run, kinds=kinds)
+    if not dry_run:
+        print("\n=== 仕上げ：在庫表を更新して git に載せる ===")
+        for root in (a, b):
+            verify(root)
+            export_manifest(root)
+        print("\nこのあと git add results/ssd_manifests && git commit && git push")
 
 
 def status():
@@ -182,15 +293,30 @@ def main(argv):
         return
     cmd = argv[0]
     root = paths.data_root()
+    kinds = None
+    if "--weights-only" in argv:
+        kinds = {"weights"}
     if cmd == "verify":
-        verify(root, rehash="--fast" not in argv)
+        verify(root, full="--full" in argv)
         export_manifest(root)
     elif cmd == "export":
         export_manifest(root)
     elif cmd == "diff":
         diff(root, Path(argv[1]))
     elif cmd == "pull":
-        pull(root, Path(argv[1]), dry_run="--run" not in argv)
+        pull(root, Path(argv[1]), dry_run="--run" not in argv,
+             kinds=kinds, force="--force" in argv)
+    elif cmd == "unify":
+        unify(root, Path(argv[1]), dry_run="--run" not in argv, kinds=kinds)
+    elif cmd == "check":
+        added, removed, modified = manifest_is_stale(root)
+        if added or removed or modified:
+            print(f"在庫表が古いです: 未登録 {len(added)} / 消失 {len(removed)} "
+                  f"/ 変更 {len(modified)}")
+            for k in (added + modified + removed)[:20]:
+                print("   ", k)
+            sys.exit(1)
+        print("在庫表は最新です。")
     elif cmd == "status":
         status()
     else:
