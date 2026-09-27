@@ -184,12 +184,32 @@ def check():
             if region not in known:
                 problems.append(f"{n}: dataset の地域 '{region}' が regions.yaml にありません")
 
+        # inputs と pkl の食い違い。航空写真を入力に使うのに pkl に入っていなければ、
+        # 学習中に AttributeError で落ちる。ファイル名から推定して先に止める。
+        for region, fn in c.dataset.items():
+            low = fn.lower()
+            for key, token, label in (("airphoto", "_apm", "航空写真"),
+                                      ("geology", "_geo", "地質図")):
+                uses = any(i.key == key for i in c.inputs)
+                if uses and token not in low:
+                    problems.append(
+                        f"{n}: inputs に{label}があるのに、{region} の pkl "
+                        f"'{fn}' には含まれていないようです")
+
         if c.status == "active":
             try:
-                from .models import MODEL_CLASSES
+                from .models import MODEL_CLASSES, forward_arity
                 if c.arch not in MODEL_CLASSES:
                     problems.append(f"{n}: モデルクラス {c.arch} が dc5lib/models.py に"
-                                    f"登録されていません")
+                                    f"登録されていません"
+                                    f"（登録済み: {list(MODEL_CLASSES)}）")
+                else:
+                    want = forward_arity(c.arch)
+                    if want != c.n_inputs:
+                        problems.append(
+                            f"{n}: 入力数が合いません。{c.arch}.forward は {want} 入力ですが、"
+                            f"config の inputs は {c.n_inputs} 個です"
+                            f"（{'+'.join(i.source for i in c.inputs)}）")
             except Exception:
                 pass
     return problems

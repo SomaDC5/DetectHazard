@@ -559,3 +559,24 @@ def load_weights(model, checkpoint_path, device="cpu"):
             if k in ckpt:
                 meta[k] = ckpt[k]
     return meta
+
+
+def forward_arity(class_name: str) -> int:
+    """そのモデルの forward が受け取る入力の数。config の inputs と突き合わせる。"""
+    import inspect
+    cls = MODEL_CLASSES[class_name]
+    return len([p for p in inspect.signature(cls.forward).parameters
+                if p not in ("self", "return_attention")])
+
+
+if __name__ == "__main__":
+    import inspect
+
+    print(f"{'クラス名':<28}{'forward の引数':<26}{'入力数'}")
+    for name, cls in MODEL_CLASSES.items():
+        sig = [p for p in inspect.signature(cls.forward).parameters
+               if p not in ("self", "return_attention")]
+        print(f"{name:<28}{'(' + ', '.join(sig) + ')':<26}{len(sig)}")
+    print("\n新しいモデルを足すときは、このファイルにクラスを書いて "
+          "MODEL_CLASSES に登録する。\n"
+          "登録を忘れると tools/check.py が止めてくれる。")

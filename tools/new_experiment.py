@@ -255,6 +255,15 @@ def main():
 
     print(f"\n「{a.name}」は使われていません。雛形を作ります。")
 
+    # arch の妥当性は、作ってから check.py で気づくより、ここで言うほうが早い
+    if a.arch:
+        from dc5lib.models import MODEL_CLASSES
+        if a.arch not in MODEL_CLASSES:
+            print(f"\n  ! モデルクラス「{a.arch}」は dc5lib/models.py に登録されていません。")
+            print(f"    登録済み: {', '.join(MODEL_CLASSES)}")
+            print(f"    このまま作れますが、学習の前に models.py にクラスを追加して")
+            print(f"    MODEL_CLASSES に登録してください（python -m dc5lib.models で一覧）。")
+
     # config を作る
     if a.base:
         base_cfg = paths.experiment_dir(a.base) / "config.yaml"
@@ -307,6 +316,39 @@ def main():
         loss["center_lam"] = a.center_lam
     if loss:
         train["loss"] = loss
+
+    # 入力数とモデルの forward が食い違っていたら、作る前に言う
+    try:
+        from dc5lib.models import MODEL_CLASSES, forward_arity
+        arch = cfg.get("arch")
+        if arch in MODEL_CLASSES:
+            want = forward_arity(arch)
+            got = len(cfg.get("inputs", []))
+            if got and want != got:
+                srcs = "+".join(i["source"] for i in cfg["inputs"])
+                print(f"\n  ! 入力数が合いません。{arch}.forward は {want} 入力ですが、"
+                      f"inputs は {got} 個（{srcs}）です。")
+                print(f"    --inputs か --arch を見直してください。")
+                sys.exit(1)
+    except SystemExit:
+        raise
+    except Exception:
+        pass
+
+    # inputs を変えたのに dataset がひな形のままだと、余計なものを読み込む。
+    # 致命的ではないので警告にとどめる。
+    if a.inputs:
+        keys = {i["key"] for i in cfg.get("inputs", [])}
+        for region, fn in (cfg.get("dataset") or {}).items():
+            low = fn.lower()
+            for key, token, label in (("airphoto", "_apm", "航空写真"),
+                                      ("geology", "_geo", "地質図")):
+                if token in low and key not in keys:
+                    print(f"\n  ! {region} の pkl '{fn}' は{label}を含みますが、"
+                          f"inputs には入っていません。")
+                    print(f"    読み込みが無駄に重くなります。"
+                          f"config.yaml の dataset を見直してください。")
+                    break
 
     d = paths.experiment_dir(a.name)
     d.mkdir(parents=True, exist_ok=False)
