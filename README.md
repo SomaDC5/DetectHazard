@@ -86,8 +86,10 @@ DetectHazard/
 ├── analysis/               タイル単位の再解析ツール
 ├── results/                ★ 精度の一括管理
 ├── docs/                   設計メモ・発表資料・引き継ぎ
+│   └── FSS_analysis_参考/  前任の解析プログラム（参照用。動かすものではない）
 ├── workspace/              Claude Code の作業場所（マシンごとに分けてある）
 └── tools/                  移行・集計スクリプト
+    └── dataset_build/      GeoTIFFから .pkl を作る一式（3チャネル対応）
 ```
 
 ---
