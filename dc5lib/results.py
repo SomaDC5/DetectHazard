@@ -168,7 +168,8 @@ def build_metrics_csv() -> Path:
                              r.get("eval_id", "")))
     out = paths.results_dir() / "metrics.csv"
     with open(out, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=COLUMNS, extrasaction="ignore")
+        w = csv.DictWriter(f, fieldnames=COLUMNS, extrasaction="ignore",
+                            lineterminator="\n")
         w.writeheader()
         for r in rows:
             w.writerow({c: r.get(c, "") for c in COLUMNS})

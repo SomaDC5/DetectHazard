@@ -17,3 +17,4 @@ dependencies:
   - opencv
   - jupyterlab
   - ipykernel
+  - torchvision          # JointTransform が使う
