@@ -55,6 +55,13 @@ set DC5_DATA=D:\dc5-data                              # Windows
 
 SSDは2台ある。両方挿しているときは `DC5_SSD_ID=A` のように指定する。
 
+| ssd_id | ラベル | 備考 |
+|---|---|---|
+| A | `SSD-PHPU3A` | |
+| B | `Soma_SSD` | データセット構築の元データ（`simane/`, `newHirosima/`, `PhotoData/`）と `FSS_analysis` もこちらにある |
+
+2台の中身は `dc5-data/` の範囲では完全に同一（48ファイル / 65.3GB / sha256一致）。
+
 > **リポジトリは各PCのローカルディスクに clone すること。**
 > 外部SSD（exFAT）上の clone はシンボリックリンクとパーミッションが扱えず、
 > Ubuntu と Windows で差分が出る。SSDはデータ専用にする。
@@ -165,7 +172,9 @@ python -m dc5lib.sync pull  <他方> --run   # 足りないものだけコピー
 `verify` は在庫表を `results/ssd_manifests/<ssd_id>.csv` にも書き出して git に載せる。
 おかげで **SSDを挿さなくても「どの重みがどちらのSSDにあるか」が分かる。**
 
-2台目のSSDを用意するときは、`dc5-data/.dc5-root.json` の `ssd_id` を `"B"` にする。
+3台目を用意するときは、`dc5-data/.dc5-root.json` の `ssd_id` を `"C"` にして
+`python -m dc5lib.sync pull <既存のdc5-data> --run` で複製する。
+ハッシュが一致するものは自動で飛ばすので、足りないぶんだけコピーされる。
 
 ---
 
