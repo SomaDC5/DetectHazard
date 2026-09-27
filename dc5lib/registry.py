@@ -148,9 +148,37 @@ def get(name: str) -> Condition:
 
 
 # ------------------------------------------------------------------ 検査
+def _check_unicode_paths():
+    """同じ名前が NFC と NFD の両方で追跡されていないか。
+
+    macOS はファイル名を NFD で持つことがあり、git の core.precomposeunicode が
+    NFC に変換する。両方が index に入ると、Linux では別ファイル、
+    macOS / exFAT では同じファイルとして扱われ、pull が止まる。
+    実際に一度これで SSD 側の pull が失敗した。
+    """
+    import collections
+    import subprocess
+    import unicodedata
+
+    try:
+        out = subprocess.run(["git", "ls-files"], capture_output=True, text=True,
+                             cwd=paths.REPO_ROOT, timeout=60).stdout.splitlines()
+    except Exception:
+        return []
+    g = collections.defaultdict(list)
+    for p in out:
+        g[unicodedata.normalize("NFC", p)].append(p)
+    problems = []
+    for k, v in g.items():
+        if len(v) > 1:
+            problems.append(f"同じパスが Unicode 正規化違いで重複して追跡されています: {k}"
+                            f"（Linux では別ファイル、macOS/exFAT では同じ扱いになり pull が止まります）")
+    return problems
+
+
 def check():
     """CI / コミット前に回す検査。異常があれば行を返す。"""
-    problems = []
+    problems = _check_unicode_paths()
     names = [p.name for p in sorted(paths.experiments_dir().iterdir()) if p.is_dir()]
 
     # exFAT と Windows は大文字小文字を区別しないが、Ubuntu の ext4 は区別する。
