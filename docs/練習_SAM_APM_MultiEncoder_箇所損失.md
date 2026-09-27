@@ -29,13 +29,35 @@ git pull
 
 ## ステップ2　指定できるものを全部指定して作る
 
+**1行で貼ること。** 行継続（`\`）で複数行にすると、貼り付け時に途中で切れて
+後半の引数が渡らないことがある。実際それで `--loss` が効かず、
+ひな形の `focal_tversky` のまま作られたことがあった。
+
 ```bash
-./.venv/bin/python tools/new_experiment.py FinalFusion_SAM_APM_InstLoss \
-    --from FinalFusion_SAM_APM \
-    --arch MultiEncoderUNet --family Final --inputs SAM+APM \
-    --loss instance_weighted_focal_tversky --a0 300 --p 0.5 --beta 0.5 \
-    --epochs 1000 --seed 42 \
-    --note "SAM+APM・MultiEncoder に箇所正規化損失。FinalFusion_SAM_APM の損失違い"
+./.venv/bin/python tools/new_experiment.py FinalFusion_SAM_APM_InstLoss --from FinalFusion_SAM_APM --arch MultiEncoderUNet --family Final --inputs SAM+APM --loss instance_weighted_focal_tversky --a0 300 --p 0.5 --beta 0.5 --epochs 1000 --seed 42 --note "SAM+APM・MultiEncoder に箇所正規化損失。FinalFusion_SAM_APM の損失違い"
+```
+
+実行すると、**作られた内容がその場で表示される**。ここで意図どおりか確かめる。
+
+```
+作成された条件
+  arch     MultiEncoderUNet
+  family   Final
+  inputs   SAM+APM (1+3 ch)
+  augment  False
+  bg_ratio 0.0
+  epochs   1000   seed 42
+  loss     instance_weighted_focal_tversky(alpha=0.7, beta=0.5, gamma=0.75, a0=300, p=0.5, center_lam=0.0)  ※重みマップが必要
+  dataset  Hiroshima: hiroshima_sam_apm.pkl
+  dataset  Shimane: shimane_sam_apm.pkl
+```
+
+`loss` が `focal_tversky(...)` になっていたら `--loss` が渡っていない。
+その場合はこう出る。
+
+```
+  ※ --loss を指定していないので、ひな形の focal_tversky を引き継いでいます。
+    違うものにしたい場合は --loss を付け直すか、config.yaml の train.loss を直接編集してください。
 ```
 
 引数の意味。

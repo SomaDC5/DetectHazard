@@ -373,6 +373,33 @@ def main():
                 msg += f" / 損失を config 駆動に差し替え（{n}箇所）"
             print(f"  複製: experiments/{a.name}/{nb.name}（{msg}）")
 
+    # 何が出来たかをその場で見せる。指定し忘れ（行継続の切れなど）に気づけるように。
+    try:
+        from dc5lib.registry import get as _get
+        from dc5lib.losses import describe as _describe
+        c = _get(a.name)
+        print("\n作成された条件")
+        print(f"  arch     {c.arch}")
+        print(f"  family   {c.family}")
+        print(f"  inputs   {'+'.join(i.source for i in c.inputs)} "
+              f"({'+'.join(str(i.channels) for i in c.inputs)} ch)")
+        print(f"  augment  {c.augment}")
+        print(f"  bg_ratio {c.bg_ratio}")
+        print(f"  epochs   {c.train.get('epochs')}   seed {c.train.get('seed')}")
+        print(f"  loss     {_describe(a.name)}")
+        for region, fn in c.dataset.items():
+            print(f"  dataset  {region}: {fn}")
+        base_loss = (yaml.safe_load(
+            (paths.experiment_dir(a.base) / "config.yaml").read_text(encoding="utf-8"))
+            .get("train", {}).get("loss", {}).get("type")) if a.base else None
+        if a.loss is None and base_loss:
+            print(f"\n  ※ --loss を指定していないので、ひな形の {base_loss} を"
+                  f"引き継いでいます。")
+            print(f"    違うものにしたい場合は --loss を付け直すか、"
+                  f"config.yaml の train.loss を直接編集してください。")
+    except Exception as e:
+        print(f"（確認表示に失敗: {e}）")
+
     print(f"""
 次にやること
 
