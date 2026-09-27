@@ -58,43 +58,59 @@ def _git(*args, cwd=None):
         return ""
 
 
-def names_everywhere(fetch=True):
-    """ローカルと、すべてのリモートブランチで使われている条件名を集める。
+def _names_in(ref):
+    out = _git("ls-tree", "-d", "--name-only", ref, "experiments/")
+    return {line.strip().rstrip("/").split("/")[-1]
+            for line in out.splitlines() if line.strip()}
 
-    相手のPCがまだマージしていないブランチで使っている名前も拾いたい。
+
+def names_everywhere(fetch=True):
+    """条件名がどこで使われているかを集める。
+
+    「自分のブランチの履歴にある」のと「相手のPCのブランチにある」のは
+    意味が違う（前者は自分で消せる）ので、分けて返す。
     """
     local = {p.name for p in paths.experiments_dir().iterdir() if p.is_dir()}
     if fetch:
         print("  git fetch 中 …", flush=True)
         _git("fetch", "--all", "--quiet")
-    remote = set()
-    refs = _git("for-each-ref", "--format=%(refname)", "refs/remotes").split()
-    for ref in refs:
+
+    here = _git("rev-parse", "--abbrev-ref", "HEAD").strip()
+    mine = _names_in("HEAD")                     # 自分のブランチの履歴
+    others, refs = set(), []
+    for ref in _git("for-each-ref", "--format=%(refname)", "refs/remotes").split():
         if ref.endswith("/HEAD"):
             continue
-        out = _git("ls-tree", "-d", "--name-only", ref, "experiments/")
-        for line in out.splitlines():
-            n = line.strip().rstrip("/").split("/")[-1]
-            if n:
-                remote.add(n)
-    return local, remote, refs
+        refs.append(ref)
+        names = _names_in(ref)
+        if ref.endswith("/" + here):
+            mine |= names                        # 自分のブランチのリモート側
+        else:
+            others |= names
+    return local, mine, others, refs
 
 
-def check_name(name, local, remote):
-    problems = []
+def check_name(name, local, mine, others):
+    problems, hints = [], []
     if not name or not all(c.isalnum() or c in "_-" for c in name):
         problems.append("名前に使えるのは英数字と _ - だけです")
     if name in local:
-        problems.append(f"ローカルに同名の条件があります: experiments/{name}")
-    if name in remote:
-        problems.append(f"リモートのブランチに同名の条件があります: {name}"
-                        f"（相手のPCが使っている可能性）")
-    # 大文字小文字だけ違うものは、Ubuntu と Windows/exFAT で扱いが変わり壊れる
-    for other in local | remote:
+        problems.append(f"ローカルの作業ツリーに同名の条件があります: experiments/{name}")
+    if name in mine and name not in local:
+        problems.append(f"自分のブランチの履歴に同名の条件が残っています: {name}")
+        hints.append("  （作業ツリーからは消えているが、コミットには残っている状態）")
+        hints.append(f"  消してよければ: git rm -r --cached experiments/{name} && "
+                     f"git commit -m 'remove {name}' && git push")
+    elif name in mine:
+        hints.append("  （自分のブランチにあるものなので、消すか名前を変えれば使えます）")
+    if name in others:
+        problems.append(f"別のブランチに同名の条件があります: {name}"
+                        f"（他のPCが作業中の可能性）")
+    for other in local | mine | others:
         if other != name and other.lower() == name.lower():
             problems.append(f"大文字小文字だけが違う条件があります: {other}"
                             f"（Ubuntuでは別物、Windows/exFATでは同じ扱いになり壊れます）")
-    return problems
+    return problems, hints
 
 
 def patch_notebook_loss(nb_path: Path, cfg: dict):
@@ -228,29 +244,36 @@ def main():
     ap.add_argument("--no-fetch", action="store_true", help="git fetch を省く（オフライン時）")
     a = ap.parse_args()
 
-    local, remote, refs = names_everywhere(fetch=not a.no_fetch)
+    local, mine, others, refs = names_everywhere(fetch=not a.no_fetch)
 
     if a.list or not a.name:
         print(f"\nローカル（experiments/）{len(local)} 件")
         for n in sorted(local):
             print("   ", n)
-        only_remote = sorted(remote - local)
-        if only_remote:
-            print(f"\nリモートのブランチにだけある {len(only_remote)} 件"
-                  f"（相手のPCが作業中の可能性）")
-            for n in only_remote:
+        stale = sorted(mine - local)
+        if stale:
+            print(f"\n自分のブランチの履歴にだけ残っている {len(stale)} 件")
+            for n in stale:
+                print("   ", n)
+        only_others = sorted(others - local - mine)
+        if only_others:
+            print(f"\n別のブランチにだけある {len(only_others)} 件"
+                  f"（他のPCが作業中の可能性）")
+            for n in only_others:
                 print("   ", n)
         print(f"\n参照したリモートブランチ: {len(refs)} 本")
         if not a.name:
             print("\n条件名を指定すると雛形を作ります。")
         return
 
-    problems = check_name(a.name, local, remote)
+    problems, hints = check_name(a.name, local, mine, others)
     if problems:
         print(f"\n「{a.name}」は使えません。")
         for p in problems:
             print("  -", p)
-        print("\n別の名前にしてください。")
+        for h in hints:
+            print(h)
+        print("\n別の名前にするか、上の方法で消してください。")
         sys.exit(1)
 
     print(f"\n「{a.name}」は使われていません。雛形を作ります。")
