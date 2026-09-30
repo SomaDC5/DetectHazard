@@ -1,0 +1,36 @@
+# 実験条件の定義。フォルダを増やせば条件が増える。
+# 重みは dc5-data/weights/<name>/ にあり、ここには置かない。
+name: FinalFusion_SAM_APM_bg10_DeepSup
+arch: DeepSupMultiEncoderUNet
+family: Final
+inputs:
+- key: terrain
+  source: SAM
+  channels: 1
+  field: DEM
+- key: airphoto
+  source: APM
+  channels: 3
+  field: AirPhoto
+augment: false
+bg_ratio: 0.1
+status: active
+label: ''
+note: bg10 に深層監督（64x64 のスキップ接続に存在マップを教える）を足した版。aux_lambda=0.5。展望.md 5節。中心点ではなく存在マップにしたのは正解の円形度中央値が0.198（85.5%が0.3未満）で細長いため
+dataset:
+  Hiroshima: hiroshima_sam_apm.pkl
+  Shimane: shimane_sam_apm.pkl
+train:
+  epochs: 300
+  batch_size: 32
+  lr: 0.0001
+  seed: 42
+  split: 6:2:2 (train_test_split test_size=0.2 -> 0.25, random_state=42)
+  model_selection: 検証データのF値が最良のエポック
+  loss:
+    type: focal_tversky
+    alpha: 0.7
+    beta: 0.3
+    gamma: 0.75
+    aux_lambda: 0.5      # 深層監督の補助損失の重み
+  augment_params: null
