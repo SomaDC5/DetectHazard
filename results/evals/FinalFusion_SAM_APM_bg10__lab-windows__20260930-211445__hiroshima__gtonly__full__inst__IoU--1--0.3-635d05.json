@@ -1,0 +1,19 @@
+{
+ "condition": "FinalFusion_SAM_APM_bg10",
+ "eval_id": "FinalFusion_SAM_APM_bg10__lab-windows__20260930-211445__hiroshima__gtonly__full__inst__IoU--1--0.3-635d05",
+ "evaluated_at": "2026-09-30T21:14:45",
+ "f1": 0.6138,
+ "machine": "lab-windows",
+ "metric_kind": "箇所",
+ "n_gt_instances": "8977",
+ "n_pred_instances": "7886",
+ "note": "連結性8近傍 / 最小サイズ10px / 二値化0.5",
+ "precision": 0.6513,
+ "recall": 0.5805,
+ "region": "hiroshima",
+ "run_id": "FinalFusion_SAM_APM_bg10__lab-windows__20260930-211445",
+ "scope": "通常",
+ "setting": "IoU多対1 (0.3)",
+ "tileset": "警戒のみ",
+ "weights_sha256": null
+}
