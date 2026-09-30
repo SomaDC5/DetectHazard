@@ -144,6 +144,17 @@ from dc5lib.registry import get
 
 `dem_trainval, dem_test, ... = train_test_split(...)` の**前**に置く。
 
+> **必ずガウシアンフィルターを適用したあとのマスクから作ること。**
+> マスクは前処理セルで `uint8*255 → gaussian_filter(sigma=1) → >0` と均され、
+> 学習・損失計算にはこの均したマスクを使う。重みマップを均す前のマスクから
+> 作ると、損失の中で「均す前の重み」と「均したあとのマスク」が混ざり、
+> 箇所の輪郭が1〜2px ずれたまま学習することになる。
+>
+> **ずれても例外は出ず、静かに間違った重みで学習が進む。**
+> `precompute_weights` は生のマスクでも動いてしまうため、気づけない。
+> 背景タイルを混ぜる場合は、そちら（`dataset3`）にも同じフィルターが
+> かかっていることを確認する。
+
 ```python
 _, NEEDS_WEIGHT = build_loss(CONDITION)
 print("損失:", describe(CONDITION))
