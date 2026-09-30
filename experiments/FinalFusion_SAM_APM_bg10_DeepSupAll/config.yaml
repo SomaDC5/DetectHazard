@@ -1,0 +1,38 @@
+# 実験条件の定義。フォルダを増やせば条件が増える。
+# 重みは dc5-data/weights/<name>/ にあり、ここには置かない。
+name: FinalFusion_SAM_APM_bg10_DeepSupAll
+arch: AllSkipDeepSupMultiEncoderUNet
+family: Final
+inputs:
+- key: terrain
+  source: SAM
+  channels: 1
+  field: DEM
+- key: airphoto
+  source: APM
+  channels: 3
+  field: AirPhoto
+augment: false
+bg_ratio: 0.1
+status: active
+label: ''
+note: 深層監督をスキップ接続の3段(128/64/32)に入れた版。aux_lambda=0.5 を段数で割るので補助損失の総圧力は1段版と同じ。早期終了つき
+dataset:
+  Hiroshima: hiroshima_sam_apm.pkl
+  Shimane: shimane_sam_apm.pkl
+train:
+  epochs: 1000
+  batch_size: 32
+  lr: 0.0001
+  seed: 42
+  early_stop_patience: 100   # 検証F1がこのエポック数だけ更新されなければ打ち切る
+  split: 6:2:2 (train_test_split test_size=0.2 -> 0.25, random_state=42)
+  model_selection: 検証データのF値が最良のエポック
+  loss:
+    type: focal_tversky
+    alpha: 0.7
+    beta: 0.3
+    gamma: 0.75
+    aux_lambda: 0.5        # 深層監督の重み。段数で割るので合計がこの値
+    aux_stages: [1, 2, 3]  # 監督する段 1=128x128 2=64x64 3=32x32
+  augment_params: null

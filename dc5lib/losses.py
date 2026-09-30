@@ -65,7 +65,7 @@ WEIGHT_KEYS = ("a0", "p", "center_lam")
 
 # 深層監督の補助損失の重み（損失そのものには渡さない）。
 # DeepSupMultiEncoderUNet のように補助出力を持つモデルでだけ使う。
-AUX_KEYS = ("aux_lambda",)
+AUX_KEYS = ("aux_lambda", "aux_stages")
 
 
 def _spec(cond):
@@ -120,17 +120,30 @@ def aux_lambda(cond) -> float:
     return float(_spec(cond).get("aux_lambda", 0.0) or 0.0)
 
 
+def aux_stages(cond) -> tuple:
+    """深層監督を入れるスキップ接続の段。
+
+    AllSkipDeepSupMultiEncoderUNet で使う。既定は (1, 2, 3)。
+    16x16 の段(4)は 50px の箇所がサブピクセルになるので既定から外している。
+    """
+    v = _spec(cond).get("aux_stages")
+    return tuple(int(x) for x in v) if v else (1, 2, 3)
+
+
 def describe(cond) -> str:
     spec = _spec(cond)
     kind = spec.get("type", "focal_tversky")
     p = dict(DEFAULTS.get(kind, {}))
     p.update({k: v for k, v in spec.items() if k != "type" and v is not None})
     lam = p.pop("aux_lambda", None)
+    stg = p.pop("aux_stages", None)
     body = ", ".join(f"{k}={v}" for k, v in p.items())
     _, needs = build_loss(cond)
     out = f"{kind}({body})"
     if lam:
         out += f" + {lam}*深層監督"
+        if stg:
+            out += f"(段 {','.join(str(x) for x in stg)})"
     return out + ("  ※重みマップが必要" if needs else "")
 
 

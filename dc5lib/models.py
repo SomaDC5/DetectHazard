@@ -607,6 +607,78 @@ def downsample_mask(mask, factor=2):
     return torch.nn.functional.max_pool2d(mask, kernel_size=factor, stride=factor)
 
 
+class AllSkipDeepSupMultiEncoderUNet(MultiEncoderUNet):
+    """スキップ接続の複数の段に、存在マップの監督を入れたもの。
+
+    DeepSupMultiEncoderUNet は 64x64 の1段だけを監督する。こちらは段を選べる。
+
+      段 | 解像度   | ch   | 50px の箇所
+      ---+---------+------+-------------
+      1  | 128x128 |  128 | 7x7
+      2  |  64x64  |  256 | 4x4
+      3  |  32x32  |  512 | 1.8x1.8
+      4  |  16x16  | 1024 | 0.9x0.9（サブピクセル。既定では使わない）
+
+    細長い構造を全スケールで監督するのは HED（Holistically-nested Edge
+    Detection）と同じ考え方。正解の円形度中央値は 0.198（85.5% が 0.3 未満）
+    で細長いため、相性が良いと考えている。
+
+    補助損失の重みは「合計が aux_lambda になる」ように段数で割る。
+    そうすると 1段だけの条件と補助損失の総圧力が揃い、
+    スケールを分散させた効果だけを比べられる。
+
+    出力
+      return_aux=False（既定） マスクだけ。推論・評価のコードは変更不要
+      return_aux=True          (マスク, {段: 存在マップ}) 。学習ループで使う
+    """
+
+    SKIP_CH = {1: 64 * 2, 2: 128 * 2, 3: 256 * 2, 4: 512 * 2}
+
+    def __init__(self, out_channels=1, aux_stages=(1, 2, 3), aux_channels=64):
+        super().__init__(out_channels=out_channels)
+        self.aux_stages = tuple(int(s) for s in aux_stages)
+        assert all(s in self.SKIP_CH for s in self.aux_stages),             f"aux_stages は {sorted(self.SKIP_CH)} から選ぶ: {self.aux_stages}"
+        self.aux_heads = nn.ModuleDict({
+            str(s): nn.Sequential(
+                nn.Conv2d(self.SKIP_CH[s], aux_channels, kernel_size=3, padding=1),
+                nn.BatchNorm2d(aux_channels),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(aux_channels, out_channels, kernel_size=1),
+            ) for s in self.aux_stages
+        })
+
+    def forward(self, dem, air, return_aux=False):
+        slope1 = self.slope_enc1(dem)
+        slope2 = self.slope_enc2(self.slope_pool1(slope1))
+        slope3 = self.slope_enc3(self.slope_pool2(slope2))
+        slope4 = self.slope_enc4(self.slope_pool3(slope3))
+        slope4 = self.dropout2(slope4)
+
+        curv1 = self.curv_enc1(air)
+        curv2 = self.curv_enc2(self.curv_pool1(curv1))
+        curv3 = self.curv_enc3(self.curv_pool2(curv2))
+        curv4 = self.curv_enc4(self.curv_pool3(curv3))
+        curv4 = self.dropout2(curv4)
+
+        skips = {1: torch.cat([slope1, curv1], dim=1),
+                 2: torch.cat([slope2, curv2], dim=1),
+                 3: torch.cat([slope3, curv3], dim=1),
+                 4: torch.cat([slope4, curv4], dim=1)}
+
+        fused = torch.cat([self.slope_pool4(slope4), self.curv_pool4(curv4)], dim=1)
+        bottleneck = self.dropout(self.bottleneck(fused))
+
+        dec4 = self.dec4(torch.cat([self.up4(bottleneck), skips[4]], dim=1))
+        dec3 = self.dec3(torch.cat([self.up3(dec4), skips[3]], dim=1))
+        dec2 = self.dec2(torch.cat([self.up2(dec3), skips[2]], dim=1))
+        dec1 = self.dec1(torch.cat([self.up1(dec2), skips[1]], dim=1))
+
+        out = self.out_conv(dec1)
+        if return_aux:
+            return out, {s: self.aux_heads[str(s)](skips[s]) for s in self.aux_stages}
+        return out
+
+
 MODEL_CLASSES = {
     "UNet": UNet,
     "MultiEncoderUNet": MultiEncoderUNet,
@@ -615,6 +687,7 @@ MODEL_CLASSES = {
     "AttentionMultiEncoderUNet": AttentionMultiEncoderUNet,
     "TransUNetDual": TransUNetDual,
     "DeepSupMultiEncoderUNet": DeepSupMultiEncoderUNet,
+    "AllSkipDeepSupMultiEncoderUNet": AllSkipDeepSupMultiEncoderUNet,
 }
 
 
