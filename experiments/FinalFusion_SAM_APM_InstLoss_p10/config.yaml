@@ -1,0 +1,38 @@
+# 実験条件の定義。フォルダを増やせば条件が増える。
+# 重みは dc5-data/weights/<name>/ にあり、ここには置かない。
+name: FinalFusion_SAM_APM_InstLoss_p10
+arch: MultiEncoderUNet
+family: Final
+inputs:
+- key: terrain
+  source: SAM
+  channels: 1
+  field: DEM
+- key: airphoto
+  source: APM
+  channels: 3
+  field: AirPhoto
+augment: false
+bg_ratio: 0.0
+status: active
+label: ''
+note: 箇所正規化損失の p を 0.5 から 1.0 に上げた版。p=0.5 では面積F・箇所Fとも元条件とほぼ同じだったため。過小評価8.45倍を打ち消す設定
+dataset:
+  Hiroshima: hiroshima_sam_apm.pkl
+  Shimane: shimane_sam_apm.pkl
+train:
+  epochs: 1000
+  batch_size: 32
+  lr: 0.0001
+  seed: 42
+  split: 6:2:2 (train_test_split test_size=0.2 -> 0.25, random_state=42)
+  model_selection: 検証データのF値が最良のエポック
+  loss:
+    type: instance_weighted_focal_tversky
+    alpha: 0.7
+    beta: 0.5
+    gamma: 0.75
+    a0: 300
+    p: 1.0
+    center_lam: 0.0
+  augment_params: null
