@@ -1,8 +1,11 @@
 # conda env create -f environment.yml
 # Windows(mayo環境) / Ubuntu / macOS で同じものを再現するための定義。
-# PyTorch は CUDA の有無で入れ分けるため、ここには含めない。
-#   CUDA あり: conda install pytorch pytorch-cuda=12.1 -c pytorch -c nvidia
-#   CPU / Apple Silicon: pip install torch
+# PyTorch はここに直接書いていないが、conda-forge の torchvision が連れてくる。
+# GPUのあるPCでは CUDA ビルドが入るので、普通はこれだけでよい。
+# ただし、入ったビルドが自分のGPUの世代に対応しているかは必ず確かめること。
+#   python -c "import torch; print(torch.cuda.get_arch_list())"
+# 対応していなかったときの入れ直し方は README「2. 最初にやること」。
+# CUDA のバージョンを決め打ちにしないこと（GPUを買い替えた瞬間に壊れる）。
 name: dc5
 channels: [conda-forge]
 dependencies:

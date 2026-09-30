@@ -76,9 +76,9 @@ def find_data_roots():
     def consider(p: Path):
         try:
             p = p.resolve()
-        except OSError:
-            return
-        if p in seen or not p.is_dir():
+            if p in seen or not p.is_dir():
+                return
+        except OSError:      # 読めないマウント（Ubuntu の /media/root など）は飛ばす
             return
         info = _read_marker(p)
         if info is not None:
