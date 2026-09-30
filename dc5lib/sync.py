@@ -69,7 +69,7 @@ def read_manifest(root: Path):
 
 def write_manifest(root: Path, rows):
     with open(manifest_path(root), "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=FIELDS)
+        w = csv.DictWriter(f, fieldnames=FIELDS, lineterminator="\n")
         w.writeheader()
         w.writerows(rows)
 

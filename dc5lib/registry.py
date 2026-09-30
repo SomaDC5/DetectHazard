@@ -148,9 +148,37 @@ def get(name: str) -> Condition:
 
 
 # ------------------------------------------------------------------ 検査
+def _check_unicode_paths():
+    """同じ名前が NFC と NFD の両方で追跡されていないか。
+
+    macOS はファイル名を NFD で持つことがあり、git の core.precomposeunicode が
+    NFC に変換する。両方が index に入ると、Linux では別ファイル、
+    macOS / exFAT では同じファイルとして扱われ、pull が止まる。
+    実際に一度これで SSD 側の pull が失敗した。
+    """
+    import collections
+    import subprocess
+    import unicodedata
+
+    try:
+        out = subprocess.run(["git", "ls-files"], capture_output=True, text=True,
+                             cwd=paths.REPO_ROOT, timeout=60).stdout.splitlines()
+    except Exception:
+        return []
+    g = collections.defaultdict(list)
+    for p in out:
+        g[unicodedata.normalize("NFC", p)].append(p)
+    problems = []
+    for k, v in g.items():
+        if len(v) > 1:
+            problems.append(f"同じパスが Unicode 正規化違いで重複して追跡されています: {k}"
+                            f"（Linux では別ファイル、macOS/exFAT では同じ扱いになり pull が止まります）")
+    return problems
+
+
 def check():
     """CI / コミット前に回す検査。異常があれば行を返す。"""
-    problems = []
+    problems = _check_unicode_paths()
     names = [p.name for p in sorted(paths.experiments_dir().iterdir()) if p.is_dir()]
 
     # exFAT と Windows は大文字小文字を区別しないが、Ubuntu の ext4 は区別する。
@@ -184,12 +212,32 @@ def check():
             if region not in known:
                 problems.append(f"{n}: dataset の地域 '{region}' が regions.yaml にありません")
 
+        # inputs と pkl の食い違い。航空写真を入力に使うのに pkl に入っていなければ、
+        # 学習中に AttributeError で落ちる。ファイル名から推定して先に止める。
+        for region, fn in c.dataset.items():
+            low = fn.lower()
+            for key, token, label in (("airphoto", "_apm", "航空写真"),
+                                      ("geology", "_geo", "地質図")):
+                uses = any(i.key == key for i in c.inputs)
+                if uses and token not in low:
+                    problems.append(
+                        f"{n}: inputs に{label}があるのに、{region} の pkl "
+                        f"'{fn}' には含まれていないようです")
+
         if c.status == "active":
             try:
-                from .models import MODEL_CLASSES
+                from .models import MODEL_CLASSES, forward_arity
                 if c.arch not in MODEL_CLASSES:
                     problems.append(f"{n}: モデルクラス {c.arch} が dc5lib/models.py に"
-                                    f"登録されていません")
+                                    f"登録されていません"
+                                    f"（登録済み: {list(MODEL_CLASSES)}）")
+                else:
+                    want = forward_arity(c.arch)
+                    if want != c.n_inputs:
+                        problems.append(
+                            f"{n}: 入力数が合いません。{c.arch}.forward は {want} 入力ですが、"
+                            f"config の inputs は {c.n_inputs} 個です"
+                            f"（{'+'.join(i.source for i in c.inputs)}）")
             except Exception:
                 pass
     return problems

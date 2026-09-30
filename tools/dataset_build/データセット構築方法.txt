@@ -1,0 +1,23 @@
+データセット構築方法
+DEMデータ取得方法
+　国土地理院の基盤地図情報から数値標高モデルを取得。5mメッシュ航空レーザー測量データを取得。
+　https://service.gsi.go.jp/kiban/
+　取得したzipをすべて解凍し、一つのフォルダにまとめる。
+　その後、デスクトップにある基盤地図情報標高DEM変換ツールを用いて、.tiffに変換する。
+
+　傾斜量図のデータセット（SAM+Mask）を生成する場合は、read_geotiffとbuild_shimane_dataset_v4.pyを同一フォルダにおいて、下記のコマンドを実行。
+　python build_shimane_dataset_v4.py ".tiffが入っているフォルダのパス" "正解データである.shpのパス" shimane_sam.pkl --mode sam --field A33_001 --values 1
+　--mode samのsamをdemに変える事で、DEM+Maskのデータセットも生成可能。
+
+　APMも含めたマルチデータセットは、read_geotiff.pyとfetch_aerial_v2.pyとbuild_shimane_dataset_v5.pyを同一フォルダにおいて、下記のコマンドを実行。
+　python build_shimane_dataset_v5.py ".Tiffの入っているフォルダのパス" "マスク情報が入った.shpのパス" shimane_sam_apm.pkl --mode sam --field A33_001 --values 1 --apm
+　--mode samのsamをdemに変える事で、DEM+APM+Maskのデータを生成可能。
+　
+教師データ取得方法
+　国土数値情報（国交省・全国統一データ）
+　https://nlftp.mlit.go.jp/ksj/gml/datalist/KsjTmplt-A33-v2_0.html
+
+地層情報もいれた３チャネルのデータセット構築方法
+python build_shimane_dataset_v6.py "TIFFフォルダ" "シェープファイル" shimane_sam_apm_geo.pkl --mode sam --field A33_001 --values 1 --apm --geology
+もしdemで作成したなら、下記のプログラムで正規化するひつようがある。
+python normalize_dem.py apply shimane_dem_apm_geo.pkl shimane_dem_apm_geo_normalized.pkl --scale 500
