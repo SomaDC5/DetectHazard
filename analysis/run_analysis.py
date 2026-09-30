@@ -24,6 +24,15 @@ plt.rcParams["font.family"] = ["Hiragino Sans", "BIZ UDGothic", "sans-serif"]
 plt.rcParams["axes.unicode_minus"] = False
 plt.rcParams["figure.dpi"] = 130
 
+def _disp(path):
+    """表示用のパス。Windows では出力先(SSD)とリポジトリのドライブが違い、
+    os.path.relpath が ValueError を投げるので、その場合は絶対パスを返す。"""
+    try:
+        return os.path.relpath(path, config.PROJECT_DIR)
+    except ValueError:
+        return str(path)
+
+
 BLUE = "#2D6E8E"
 ORANGE = "#C0662A"
 GREY = "#8A9AA4"
@@ -48,7 +57,7 @@ def _save(fig, name):
     fig.tight_layout()
     fig.savefig(path, bbox_inches="tight")
     plt.close(fig)
-    print("  図:", os.path.relpath(path, config.PROJECT_DIR))
+    print("  図:", _disp(path))
     return path
 
 
@@ -398,7 +407,7 @@ def main():
     for region in regions:
         corrs[region].to_csv(os.path.join(R, f"agreement_{region}.csv"))
         diffs[region].to_csv(os.path.join(R, f"tile_difficulty_{region}.csv"), index=False)
-    print("  CSV:", os.path.relpath(R, config.PROJECT_DIR))
+    print("  CSV:", _disp(R))
 
 
     # ---------------------------------------------------------- 地域 × 集合
@@ -576,7 +585,7 @@ def main():
     path = os.path.join(R, "report.md")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
-    print("  レポート:", os.path.relpath(path, config.PROJECT_DIR))
+    print("  レポート:", _disp(path))
 
 
 if __name__ == "__main__":

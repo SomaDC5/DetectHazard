@@ -1,0 +1,19 @@
+{
+ "condition": "FinalFusion_SAM_APM_InstLoss",
+ "eval_id": "FinalFusion_SAM_APM_InstLoss__lab-windows__20260930-121237__shimane__all__full__inst__cov_gt-0.3--cov_pred-0.3-a20df8",
+ "evaluated_at": "2026-09-30T12:12:37",
+ "f1": 0.5377,
+ "machine": "lab-windows",
+ "metric_kind": "箇所",
+ "n_gt_instances": "27445",
+ "n_pred_instances": "30669",
+ "note": "連結性8近傍 / 最小サイズ10px / 二値化0.5",
+ "precision": 0.5205,
+ "recall": 0.5561,
+ "region": "shimane",
+ "run_id": "FinalFusion_SAM_APM_InstLoss__lab-windows__20260930-121237",
+ "scope": "通常",
+ "setting": "被覆 (cov_gt=0.3, cov_pred=0.3)",
+ "tileset": "全件",
+ "weights_sha256": "c622bf8b24f461b13b04a2fff1a43c8c38f438f4001f5083c31ec60cd24ab796"
+}

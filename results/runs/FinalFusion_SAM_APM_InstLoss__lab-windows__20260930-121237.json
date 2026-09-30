@@ -1,0 +1,37 @@
+{
+ "arch": "MultiEncoderUNet",
+ "augment": false,
+ "best_epoch": 28,
+ "best_val_f1": 0.6701,
+ "bg_ratio": 0.0,
+ "condition": "FinalFusion_SAM_APM_InstLoss",
+ "dataset": {
+  "Hiroshima": "hiroshima_sam_apm.pkl",
+  "Shimane": "shimane_sam_apm.pkl"
+ },
+ "epochs_run": 1000,
+ "machine": "lab-windows",
+ "note": "results/curves の学習曲線から復元した run 情報",
+ "recorded_at": "2026-09-30T12:12:37",
+ "run_id": "FinalFusion_SAM_APM_InstLoss__lab-windows__20260930-121237",
+ "train": {
+  "augment_params": null,
+  "batch_size": 32,
+  "epochs": 1000,
+  "loss": {
+   "a0": 300,
+   "alpha": 0.7,
+   "beta": 0.5,
+   "center_lam": 0.0,
+   "gamma": 0.75,
+   "p": 0.5,
+   "type": "instance_weighted_focal_tversky"
+  },
+  "lr": 0.0001,
+  "model_selection": "検証データのF値が最良のエポック",
+  "seed": 42,
+  "split": "6:2:2 (train_test_split test_size=0.2 -> 0.25, random_state=42)"
+ },
+ "trained_at": "20260930-121237",
+ "weights_sha256": "c622bf8b24f461b13b04a2fff1a43c8c38f438f4001f5083c31ec60cd24ab796"
+}

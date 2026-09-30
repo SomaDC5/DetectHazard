@@ -17,11 +17,19 @@
 
 ## ステップ1　名前を決める
 
+作業は **PCごとのブランチ**で行い、main へは PR 経由でマージする。
+main で直接作業しない。2台の変更が混ざる。
+
 ```bash
 cd ~/Desktop/Master/DetectHazard
+git checkout main
 git pull
+git checkout -b lab-windows        # 自分のPCのブランチ。既にあれば -b を外す
 ./.venv/bin/python tools/new_experiment.py --list
 ```
+
+ブランチ名は `DC5_MACHINE` と揃えておくと、どのPCの作業か一目で分かる
+（`lab-ubuntu` / `lab-windows` / `home`）。
 
 一覧に無い名前を選ぶ。ここでは `FinalFusion_SAM_APM_InstLoss` とする。
 
@@ -109,8 +117,12 @@ loss=instance_weighted_focal_tversky(alpha=0.7, beta=0.5, gamma=0.75, a0=300, p=
 ./.venv/bin/python tools/check.py
 git add experiments/FinalFusion_SAM_APM_InstLoss
 git commit -m "FinalFusion_SAM_APM_InstLoss の条件を追加"
-git push
+git push -u origin lab-windows
 ```
+
+**名前の予約だけなら、この時点で PR を出して main にマージしてよい。**
+config.yaml が main に載れば、相手が `git pull` した時点で名前が見える。
+学習の完了を待つ必要はない。
 
 ---
 
@@ -286,6 +298,19 @@ git pull && git add -A
 git commit -m "FinalFusion_SAM_APM_InstLoss を学習・評価"
 git push
 ```
+
+### main に入れる
+
+```bash
+git checkout main && git pull
+git checkout lab-windows && git merge main    # 相手の変更を先に取り込む
+./.venv/bin/python tools/check.py
+git push
+```
+
+そのうえで GitHub で PR を作って main にマージする。
+`results/metrics.csv` が衝突したら、手で直さず
+`./.venv/bin/python tools/make_metrics.py` で作り直してから PR を更新する。
 
 ### 何と比べるか
 
