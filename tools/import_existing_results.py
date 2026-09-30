@@ -113,6 +113,8 @@ def main():
 
     def area(row, cond, region, tileset, prefix):
         nonlocal n
+        if cond not in run_id:      # --conditions で絞ったとき、report の他条件は飛ばす
+            return
         for scope in ("通常", "境界"):
             k = f"{prefix}{scope}_f1"
             if k not in row or row[k] in ("", None):
@@ -163,6 +165,8 @@ def main():
     if f.exists():
         for r in csv.DictReader(open(f, encoding="utf-8")):
             cond = r["condition"]
+            if cond not in run_id:  # --conditions で絞ったとき、report の他条件は飛ばす
+                continue
             region = r["region"]
             tileset = {"hiroshima": "警戒のみ", "shimane": "全件",
                        "hiroshima_bg": "背景のみ"}.get(region, region)
