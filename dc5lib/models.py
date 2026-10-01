@@ -1060,6 +1060,87 @@ class ASPPStride8MultiEncoderUNet(ASPPDeepSupMultiEncoderUNet):
         return (out, aux) if return_aux else out
 
 
+class ASPPStride4MultiEncoderUNet(ASPPDeepSupMultiEncoderUNet):
+    """ASPP + 出力ストライド4（ボトルネック 32x32 = 17.9 m/画素）。
+
+    ASPPStride8 が構造変更で唯一 bg10 を超えた（広島 面積F +0.0118 / 箇所F +0.0186）
+    ことを受けて、同じ軸（ボトルネックの解像度）をもう一段押したもの。
+
+      版              ボトルネック   m/画素   300px の箇所
+      元              8x8           71.7     1.08 px
+      ストライド8       16x16         35.8     2.17 px
+      ストライド4       32x32         17.9     4.34 px
+
+    何を変えたか
+      pool3 も pool4 も通さない。enc4 と bottleneck は 32x32 で計算する。
+      受容野が落ちるぶんを dilation で補う。
+        enc4       dilation 2（pool3 を抜いたぶん）
+        bottleneck dilation 4（pool3+pool4 を抜いたぶん）
+                   8x8 で 5px=358m → 32x32 で 17px=304m
+      up4 / up3 は拡大が不要になるので 1x1 のチャネル変換に置き換える。
+      skip3 と skip4 がどちらも 32x32 になるが、デコーダの形は変わらない。
+
+    メモリ
+      ストライド8 の約4倍。バッチ32 で収まらない場合は train.batch_size を
+      下げる（他条件と学習条件がずれる点に注意）。
+    """
+
+    def __init__(self, out_channels=1, aux_stages=(2,), aux_channels=64,
+                 aspp_branch_ch=64, dilations=(2, 4, 8),
+                 enc4_dilation=2, bottleneck_dilation=4):
+        super().__init__(out_channels=out_channels, aux_stages=aux_stages,
+                         aux_channels=aux_channels, aspp_branch_ch=aspp_branch_ch,
+                         dilations=dilations)
+
+        def block(in_ch, out_ch, d):
+            return nn.Sequential(
+                nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=d, dilation=d),
+                nn.BatchNorm2d(out_ch), nn.ReLU(inplace=True),
+                nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=d, dilation=d),
+                nn.BatchNorm2d(out_ch), nn.ReLU(inplace=True))
+
+        e = enc4_dilation
+        self.slope_enc4 = block(256, 512, e)
+        self.curv_enc4 = block(256, 512, e)
+        self.bottleneck = block(1024, 1024, bottleneck_dilation)
+        # 拡大は不要。チャネルだけ合わせる
+        self.up4 = nn.Sequential(nn.Conv2d(1024, 512, kernel_size=1, bias=False),
+                                 nn.BatchNorm2d(512), nn.ReLU(inplace=True))
+        self.up3 = nn.Sequential(nn.Conv2d(512, 256, kernel_size=1, bias=False),
+                                 nn.BatchNorm2d(256), nn.ReLU(inplace=True))
+
+    def forward(self, dem, air, return_aux=False):
+        slope1 = self.slope_enc1(dem)
+        slope2 = self.slope_enc2(self.slope_pool1(slope1))
+        slope3 = self.slope_enc3(self.slope_pool2(slope2))
+        slope4 = self.dropout2(self.slope_enc4(slope3))      # pool3 を通さない
+
+        curv1 = self.curv_enc1(air)
+        curv2 = self.curv_enc2(self.curv_pool1(curv1))
+        curv3 = self.curv_enc3(self.curv_pool2(curv2))
+        curv4 = self.dropout2(self.curv_enc4(curv3))
+
+        skips = {1: torch.cat([slope1, curv1], dim=1),
+                 2: torch.cat([slope2, curv2], dim=1),
+                 3: torch.cat([slope3, curv3], dim=1),
+                 4: torch.cat([slope4, curv4], dim=1)}
+
+        bottleneck = self.dropout(self.bottleneck(skips[4]))   # pool4 も通さない
+
+        aux = {}
+        for st in self.aux_stages:
+            skips[st] = skips[st] + self.aspp[str(st)](skips[st])
+            aux[st] = self.aux_heads[str(st)](skips[st])
+
+        dec4 = self.dec4(torch.cat([self.up4(bottleneck), skips[4]], dim=1))
+        dec3 = self.dec3(torch.cat([self.up3(dec4), skips[3]], dim=1))
+        dec2 = self.dec2(torch.cat([self.up2(dec3), skips[2]], dim=1))
+        dec1 = self.dec1(torch.cat([self.up1(dec2), skips[1]], dim=1))
+
+        out = self.out_conv(dec1)
+        return (out, aux) if return_aux else out
+
+
 MODEL_CLASSES = {
     "UNet": UNet,
     "MultiEncoderUNet": MultiEncoderUNet,
@@ -1073,6 +1154,7 @@ MODEL_CLASSES = {
     "SupAttnPerBranchMultiEncoderUNet": SupAttnPerBranchMultiEncoderUNet,
     "ASPPDeepSupMultiEncoderUNet": ASPPDeepSupMultiEncoderUNet,
     "ASPPStride8MultiEncoderUNet": ASPPStride8MultiEncoderUNet,
+    "ASPPStride4MultiEncoderUNet": ASPPStride4MultiEncoderUNet,
 }
 
 
