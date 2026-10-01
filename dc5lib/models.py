@@ -762,6 +762,103 @@ class SupAttnMultiEncoderUNet(MultiEncoderUNet):
         return (out, aux) if return_aux else out
 
 
+def aux_target(mask, key):
+    """補助出力のキーから、その段の教師（ダウンサンプルした正解マスク）を作る。
+
+    キーは段の番号（2）でも、ブランチ付きの文字列（"2_slope"）でもよい。
+    段1は等倍、段2は1/2、段3は1/4。
+    """
+    stage = int(str(key).split("_")[0])
+    return mask if stage == 1 else downsample_mask(mask, 2 ** (stage - 1))
+
+
+class SupAttnPerBranchMultiEncoderUNet(MultiEncoderUNet):
+    """監督つき Attention を、ブランチ別に持つ版。
+
+    SupAttnMultiEncoderUNet との違いは、監督と変調を concat の前に行うこと。
+
+      結合後1ヘッド（SupAttn）      cat(slope, curv) -> 1ヘッド -> 両方に同じ変調
+      ブランチ別2ヘッド（この版）     slope -> ヘッドA -> slope を変調
+                                    curv  -> ヘッドB -> curv  を変調  -> cat
+
+    なぜ分けるか
+      1) 既存の AttentionMultiEncoderUNet はブランチ別にゲートを持っており
+         （ag4_slope / ag4_curv ...）、設計が揃う。
+      2) 注意係数の解析では、32px の段で地形量ブランチが正解領域内0.705 /
+         外0.453 とはっきり絞り込む一方、航空写真側は +0.068 でほぼ素通しだった。
+         2つのブランチは有効な注意パターンが違うので、同じ変調を強制するのは
+         無理がある。
+      3) 結合後に1ヘッドだと、ヘッドは易しい方（地形量）の特徴だけで損失を
+         満たせてしまい、航空写真ブランチには監督の圧力がほとんど掛からない。
+         ブランチ別なら、各ブランチが独立に存在マップを予測する必要がある。
+
+    教師は両ヘッドとも同じ存在マップなので、新しいラベルは要らない。
+    補助損失の重みはヘッド数で割るので、合計は aux_lambda のまま
+    （結合後1ヘッド版と総圧力を揃えて比べるため）。
+
+    出力
+      return_aux=False（既定） マスクだけ。推論・評価のコードは変更不要
+      return_aux=True          (マスク, {"<段>_slope": .., "<段>_curv": ..})
+    """
+
+    BRANCH_CH = {1: 64, 2: 128, 3: 256, 4: 512}
+
+    def __init__(self, out_channels=1, aux_stages=(2,), aux_channels=64):
+        super().__init__(out_channels=out_channels)
+        self.aux_stages = tuple(int(x) for x in aux_stages)
+        assert all(x in self.BRANCH_CH for x in self.aux_stages),             f"aux_stages は {sorted(self.BRANCH_CH)} から選ぶ: {self.aux_stages}"
+
+        def head(ch):
+            return nn.Sequential(
+                nn.Conv2d(ch, aux_channels, kernel_size=3, padding=1),
+                nn.BatchNorm2d(aux_channels),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(aux_channels, out_channels, kernel_size=1),
+            )
+
+        self.aux_heads = nn.ModuleDict({
+            f"{st}_{br}": head(self.BRANCH_CH[st])
+            for st in self.aux_stages for br in ("slope", "curv")
+        })
+
+    def forward(self, dem, air, return_aux=False):
+        slope1 = self.slope_enc1(dem)
+        slope2 = self.slope_enc2(self.slope_pool1(slope1))
+        slope3 = self.slope_enc3(self.slope_pool2(slope2))
+        slope4 = self.dropout2(self.slope_enc4(self.slope_pool3(slope3)))
+
+        curv1 = self.curv_enc1(air)
+        curv2 = self.curv_enc2(self.curv_pool1(curv1))
+        curv3 = self.curv_enc3(self.curv_pool2(curv2))
+        curv4 = self.dropout2(self.curv_enc4(self.curv_pool3(curv3)))
+
+        # ボトルネックは変調前の特徴から作る（デコーダ経路だけを変える）
+        fused = torch.cat([self.slope_pool4(slope4), self.curv_pool4(curv4)], dim=1)
+        bottleneck = self.dropout(self.bottleneck(fused))
+
+        sl = {1: slope1, 2: slope2, 3: slope3, 4: slope4}
+        cv = {1: curv1, 2: curv2, 3: curv3, 4: curv4}
+
+        # concat の前に、ブランチごとに監督して変調する
+        aux = {}
+        for st in self.aux_stages:
+            s_log = self.aux_heads[f"{st}_slope"](sl[st])
+            c_log = self.aux_heads[f"{st}_curv"](cv[st])
+            aux[f"{st}_slope"], aux[f"{st}_curv"] = s_log, c_log
+            sl[st] = sl[st] * (1.0 + torch.sigmoid(s_log))
+            cv[st] = cv[st] * (1.0 + torch.sigmoid(c_log))
+
+        skips = {k: torch.cat([sl[k], cv[k]], dim=1) for k in (1, 2, 3, 4)}
+
+        dec4 = self.dec4(torch.cat([self.up4(bottleneck), skips[4]], dim=1))
+        dec3 = self.dec3(torch.cat([self.up3(dec4), skips[3]], dim=1))
+        dec2 = self.dec2(torch.cat([self.up2(dec3), skips[2]], dim=1))
+        dec1 = self.dec1(torch.cat([self.up1(dec2), skips[1]], dim=1))
+
+        out = self.out_conv(dec1)
+        return (out, aux) if return_aux else out
+
+
 MODEL_CLASSES = {
     "UNet": UNet,
     "MultiEncoderUNet": MultiEncoderUNet,
@@ -772,6 +869,7 @@ MODEL_CLASSES = {
     "DeepSupMultiEncoderUNet": DeepSupMultiEncoderUNet,
     "AllSkipDeepSupMultiEncoderUNet": AllSkipDeepSupMultiEncoderUNet,
     "SupAttnMultiEncoderUNet": SupAttnMultiEncoderUNet,
+    "SupAttnPerBranchMultiEncoderUNet": SupAttnPerBranchMultiEncoderUNet,
 }
 
 
