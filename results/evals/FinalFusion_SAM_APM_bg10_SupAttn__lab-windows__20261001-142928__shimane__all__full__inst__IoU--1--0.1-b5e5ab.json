@@ -1,0 +1,19 @@
+{
+ "condition": "FinalFusion_SAM_APM_bg10_SupAttn",
+ "eval_id": "FinalFusion_SAM_APM_bg10_SupAttn__lab-windows__20261001-142928__shimane__all__full__inst__IoU--1--0.1-b5e5ab",
+ "evaluated_at": "2026-10-01T14:29:28",
+ "f1": 0.5204,
+ "machine": "lab-windows",
+ "metric_kind": "箇所",
+ "n_gt_instances": "27445",
+ "n_pred_instances": "28225",
+ "note": "連結性8近傍 / 最小サイズ10px / 二値化0.5",
+ "precision": 0.4981,
+ "recall": 0.5447,
+ "region": "shimane",
+ "run_id": "FinalFusion_SAM_APM_bg10_SupAttn__lab-windows__20261001-142928",
+ "scope": "通常",
+ "setting": "IoU多対1 (0.1)",
+ "tileset": "全件",
+ "weights_sha256": null
+}
