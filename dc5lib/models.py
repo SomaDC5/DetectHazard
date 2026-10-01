@@ -679,6 +679,89 @@ class AllSkipDeepSupMultiEncoderUNet(MultiEncoderUNet):
         return out
 
 
+class SupAttnMultiEncoderUNet(MultiEncoderUNet):
+    """監督つき Attention。存在マップを監督し、それでスキップ特徴を変調する。
+
+    なぜこの形か（docs/展望.md 5節「発展」が予告している案）
+      Attention U-Net は「効いていない」のではなく「冗長」だった。
+      注意係数は正解領域内0.705 / 外0.453 とはっきり絞り込めているのに
+      F値が変わらない。ゲートは既にある特徴を重み付けし直すだけで、
+      何を強調すべきかを教わっていないため。
+      一方、深層監督（DeepSupMultiEncoderUNet）は箇所F +0.003 とわずかに効いた。
+      そこで、ゲートの中身を損失で縛る。
+
+        skip ──→ aux_head ──→ 存在マップ ──→ 監督（FocalTversky）
+          │                        │
+          │                     sigmoid
+          │                        ↓
+          └────── × (1 + attn) ────────→ デコーダへ
+
+      既存手法では MPRNet (Zamir et al., CVPR 2021) の Supervised Attention
+      Module が同じ形。中間出力を監督し、それを attention に変えて特徴を変調する。
+
+    変調を x * (1 + attn) の残差型にした理由
+      x * attn にすると、学習初期に attn が約0.5 のとき信号が半減して
+      学習が不安定になる。残差型なら attention が役に立たなければ
+      モデルが無視できる。MPRNet も同じ形。
+
+    出力
+      return_aux=False（既定） マスクだけ。推論・評価のコードは変更不要
+      return_aux=True          (マスク, {段: 存在マップ}) 。学習ループで使う
+    """
+
+    SKIP_CH = {1: 64 * 2, 2: 128 * 2, 3: 256 * 2, 4: 512 * 2}
+
+    def __init__(self, out_channels=1, aux_stages=(2,), aux_channels=64):
+        super().__init__(out_channels=out_channels)
+        self.aux_stages = tuple(int(s) for s in aux_stages)
+        assert all(s in self.SKIP_CH for s in self.aux_stages),             f"aux_stages は {sorted(self.SKIP_CH)} から選ぶ: {self.aux_stages}"
+        self.aux_heads = nn.ModuleDict({
+            str(s): nn.Sequential(
+                nn.Conv2d(self.SKIP_CH[s], aux_channels, kernel_size=3, padding=1),
+                nn.BatchNorm2d(aux_channels),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(aux_channels, out_channels, kernel_size=1),
+            ) for s in self.aux_stages
+        })
+
+    def forward(self, dem, air, return_aux=False):
+        slope1 = self.slope_enc1(dem)
+        slope2 = self.slope_enc2(self.slope_pool1(slope1))
+        slope3 = self.slope_enc3(self.slope_pool2(slope2))
+        slope4 = self.slope_enc4(self.slope_pool3(slope3))
+        slope4 = self.dropout2(slope4)
+
+        curv1 = self.curv_enc1(air)
+        curv2 = self.curv_enc2(self.curv_pool1(curv1))
+        curv3 = self.curv_enc3(self.curv_pool2(curv2))
+        curv4 = self.curv_enc4(self.curv_pool3(curv3))
+        curv4 = self.dropout2(curv4)
+
+        skips = {1: torch.cat([slope1, curv1], dim=1),
+                 2: torch.cat([slope2, curv2], dim=1),
+                 3: torch.cat([slope3, curv3], dim=1),
+                 4: torch.cat([slope4, curv4], dim=1)}
+
+        # 監督つき Attention: 存在マップを作り、同じものでスキップを変調する
+        aux = {}
+        for st in self.aux_stages:
+            logits = self.aux_heads[str(st)](skips[st])
+            aux[st] = logits
+            skips[st] = skips[st] * (1.0 + torch.sigmoid(logits))
+
+        # ボトルネックは変調前の特徴から作る（デコーダ経路だけを変える）
+        fused = torch.cat([self.slope_pool4(slope4), self.curv_pool4(curv4)], dim=1)
+        bottleneck = self.dropout(self.bottleneck(fused))
+
+        dec4 = self.dec4(torch.cat([self.up4(bottleneck), skips[4]], dim=1))
+        dec3 = self.dec3(torch.cat([self.up3(dec4), skips[3]], dim=1))
+        dec2 = self.dec2(torch.cat([self.up2(dec3), skips[2]], dim=1))
+        dec1 = self.dec1(torch.cat([self.up1(dec2), skips[1]], dim=1))
+
+        out = self.out_conv(dec1)
+        return (out, aux) if return_aux else out
+
+
 MODEL_CLASSES = {
     "UNet": UNet,
     "MultiEncoderUNet": MultiEncoderUNet,
@@ -688,6 +771,7 @@ MODEL_CLASSES = {
     "TransUNetDual": TransUNetDual,
     "DeepSupMultiEncoderUNet": DeepSupMultiEncoderUNet,
     "AllSkipDeepSupMultiEncoderUNet": AllSkipDeepSupMultiEncoderUNet,
+    "SupAttnMultiEncoderUNet": SupAttnMultiEncoderUNet,
 }
 
 
