@@ -980,6 +980,86 @@ class ASPPDeepSupMultiEncoderUNet(MultiEncoderUNet):
         return (out, aux) if return_aux else out
 
 
+class ASPPStride8MultiEncoderUNet(ASPPDeepSupMultiEncoderUNet):
+    """ASPP に加えて、ボトルネックの解像度を上げた版（出力ストライド 16 → 8）。
+
+    docs/次の手_文脈と不均衡.md の案A（ASPP）と案B（出力ストライドを下げる）の併用。
+
+    なぜ案Bを足すのか
+      ASPP 単体の実験で、補助ヘッド単体の F は 0.5754 → 0.6944 と大きく上がったのに
+      本体の出力は良くならなかった。**デコーダはスキップ経路をあまり使っておらず、
+      ボトルネック経路を信用している**ことになる。
+      一方 展望.md 2節(c) は「見逃し率はボトルネックでの画素数に対応する」と
+      示しており、そのボトルネックは 8x8 = 71.7 m/画素で 300px 以下の箇所が
+      サブピクセルになっている。
+      案A がデコーダの使わない経路を改善していたのに対し、案B は実際に出力を
+      駆動している経路の解像度を上げる。
+
+    何を変えたか
+      pool4 を使わず、ボトルネックを 16x16（35.9 m/画素）で計算する。
+      300px の箇所が 1.08 → 2.2 画素になる。
+      そのままでは受容野が半分になるので、ボトルネックの畳み込みに dilation を
+      入れて補う（8x8 で 5px = 358 m → 16x16 で dilation 2 の 9px = 323 m）。
+      up4（ConvTranspose 8→16）は不要になるので、チャネルを半分にする 1x1 に置き換える。
+      デコーダ以降の形は変わらない。
+
+    メモリ
+      ボトルネックの活性が4倍になる。バッチ32で収まらない場合は
+      config の train.batch_size を下げる（他条件と学習条件がずれる点に注意）。
+    """
+
+    def __init__(self, out_channels=1, aux_stages=(2,), aux_channels=64,
+                 aspp_branch_ch=64, dilations=(2, 4, 8), bottleneck_dilation=2):
+        super().__init__(out_channels=out_channels, aux_stages=aux_stages,
+                         aux_channels=aux_channels, aspp_branch_ch=aspp_branch_ch,
+                         dilations=dilations)
+        d = bottleneck_dilation
+        # ボトルネックを 16x16 で計算する。dilation で受容野を補う
+        self.bottleneck = nn.Sequential(
+            nn.Conv2d(1024, 1024, kernel_size=3, padding=d, dilation=d),
+            nn.BatchNorm2d(1024), nn.ReLU(inplace=True),
+            nn.Conv2d(1024, 1024, kernel_size=3, padding=d, dilation=d),
+            nn.BatchNorm2d(1024), nn.ReLU(inplace=True),
+        )
+        # up4 は不要（既に 16x16）。チャネルだけ 1024 -> 512 に落とす
+        self.up4 = nn.Sequential(
+            nn.Conv2d(1024, 512, kernel_size=1, bias=False),
+            nn.BatchNorm2d(512), nn.ReLU(inplace=True),
+        )
+
+    def forward(self, dem, air, return_aux=False):
+        slope1 = self.slope_enc1(dem)
+        slope2 = self.slope_enc2(self.slope_pool1(slope1))
+        slope3 = self.slope_enc3(self.slope_pool2(slope2))
+        slope4 = self.dropout2(self.slope_enc4(self.slope_pool3(slope3)))
+
+        curv1 = self.curv_enc1(air)
+        curv2 = self.curv_enc2(self.curv_pool1(curv1))
+        curv3 = self.curv_enc3(self.curv_pool2(curv2))
+        curv4 = self.dropout2(self.curv_enc4(self.curv_pool3(curv3)))
+
+        skips = {1: torch.cat([slope1, curv1], dim=1),
+                 2: torch.cat([slope2, curv2], dim=1),
+                 3: torch.cat([slope3, curv3], dim=1),
+                 4: torch.cat([slope4, curv4], dim=1)}
+
+        # pool4 を通さない。ボトルネックは 16x16 のまま
+        bottleneck = self.dropout(self.bottleneck(skips[4]))
+
+        aux = {}
+        for st in self.aux_stages:
+            skips[st] = skips[st] + self.aspp[str(st)](skips[st])
+            aux[st] = self.aux_heads[str(st)](skips[st])
+
+        dec4 = self.dec4(torch.cat([self.up4(bottleneck), skips[4]], dim=1))
+        dec3 = self.dec3(torch.cat([self.up3(dec4), skips[3]], dim=1))
+        dec2 = self.dec2(torch.cat([self.up2(dec3), skips[2]], dim=1))
+        dec1 = self.dec1(torch.cat([self.up1(dec2), skips[1]], dim=1))
+
+        out = self.out_conv(dec1)
+        return (out, aux) if return_aux else out
+
+
 MODEL_CLASSES = {
     "UNet": UNet,
     "MultiEncoderUNet": MultiEncoderUNet,
@@ -992,6 +1072,7 @@ MODEL_CLASSES = {
     "SupAttnMultiEncoderUNet": SupAttnMultiEncoderUNet,
     "SupAttnPerBranchMultiEncoderUNet": SupAttnPerBranchMultiEncoderUNet,
     "ASPPDeepSupMultiEncoderUNet": ASPPDeepSupMultiEncoderUNet,
+    "ASPPStride8MultiEncoderUNet": ASPPStride8MultiEncoderUNet,
 }
 
 
