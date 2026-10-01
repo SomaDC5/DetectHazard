@@ -1,0 +1,38 @@
+# 実験条件の定義。フォルダを増やせば条件が増える。
+# 重みは dc5-data/weights/<name>/ にあり、ここには置かない。
+name: FinalFusion_SAM_APM_bg10_SupAttnPB
+arch: SupAttnPerBranchMultiEncoderUNet
+family: Final
+inputs:
+- key: terrain
+  source: SAM
+  channels: 1
+  field: DEM
+- key: airphoto
+  source: APM
+  channels: 3
+  field: AirPhoto
+augment: false
+bg_ratio: 0.1
+status: active
+label: ''
+note: 監督つきAttentionをブランチ別に持つ版。concat の前に地形量/航空写真それぞれを監督して変調する。SupAttn(結合後1ヘッド)との違いは結合のタイミングだけ
+dataset:
+  Hiroshima: hiroshima_sam_apm.pkl
+  Shimane: shimane_sam_apm.pkl
+train:
+  epochs: 1000
+  batch_size: 32
+  lr: 0.0001
+  seed: 42
+  early_stop_patience: 100
+  split: 6:2:2 (train_test_split test_size=0.2 -> 0.25, random_state=42)
+  model_selection: 検証データのF値が最良のエポック
+  loss:
+    type: focal_tversky
+    alpha: 0.7
+    beta: 0.3
+    gamma: 0.75
+    aux_lambda: 0.5
+    aux_stages: [2]        # 監督・変調する段。ブランチごとに2ヘッド作られる
+  augment_params: null
