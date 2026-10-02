@@ -1141,6 +1141,180 @@ class ASPPStride4MultiEncoderUNet(ASPPDeepSupMultiEncoderUNet):
         return (out, aux) if return_aux else out
 
 
+class FullSkipMultiEncoderUNet(MultiEncoderUNet):
+    """全スケールのスキップをデコーダ各段に直接渡す（UNet3+ 風）。
+
+    なぜこの方向か（docs/層ごとの効き方.md）
+      bg10系7条件を箇所F で並べると、上位4つは「渡し方を変えた」もの
+      （監督・変調）で、下位2つは「中身を良くした」もの（ASPP・ストライド8）だった。
+
+        SupAttnPB  0.6411  渡し方（監督+変調・ブランチ別）
+        SupAttn    0.6340  渡し方（監督+変調）
+        DeepSupAll 0.6319  渡し方（監督）
+        DeepSup    0.6294  渡し方（監督）
+        Stride8    0.6250  中身
+        ASPP       0.6171  中身
+        bg10       0.6136  （基準）
+
+      中身（スキップの質・ボトルネックの解像度）は個別に改善しても出力に
+      届かなかった（ASPP で補助ヘッドが +0.119 でも本体は +0.009）。
+      一方まだ触っていないのが**統合のしかた**そのもので、現状は
+      cat してから conv するだけ。ここを変える。
+
+    何を変えたか
+      各デコーダ段が、ボトルネックと全スキップを直接受け取る。
+
+        現在                              この版
+        dec4 ← up4(bn) + skip4            dec4 ← bn↑ + skip4 + skip3↓ + skip2↓ + skip1↓
+        dec3 ← up3(dec4) + skip3          dec3 ← bn↑ + dec4↑ + skip3 + skip2↓ + skip1↓
+        dec2 ← up2(dec3) + skip2          dec2 ← bn↑ + dec4↑ + dec3↑ + skip2 + skip1↓
+        dec1 ← up1(dec2) + skip1          dec1 ← bn↑ + dec4↑ + dec3↑ + dec2↑ + skip1
+
+      最終段（dec1, 128x128）がボトルネックの判断を3段越しではなく直接受け取る。
+      各経路を 64ch に揃えて5本 concat するので、デコーダは一律 320ch。
+
+      コスト（RTX 16GB、バッチ32、学習と同じ forward+backward で実測）
+        パラメータ  43.6M → 52.7〜53.4M（横方向の 3x3 が20本増えるため重くなる）
+        メモリ      約6GB → 9.3〜10.6GB
+        1ステップ   約4倍（0.1s → 0.38〜0.43s）
+      デコーダ段が一律320chで軽く見えるが、全段が全スケールを受けるぶん
+      横方向の畳み込みが増えて差し引きで重くなる。
+
+    オプション（段階的に試すため既定は全部オフ）
+      aux_stages      ブランチ別の深層監督＋変調を入れる段（SupAttnPB と同じ機構）
+      use_aspp        その段にブランチ別 ASPP を入れる
+
+    出力
+      return_aux=False（既定） マスクだけ。推論・評価のコードは変更不要
+      return_aux=True          (マスク, {"<段>_slope": .., "<段>_curv": ..})
+    """
+
+    BRANCH_CH = {1: 64, 2: 128, 3: 256, 4: 512}
+    SCALE = {1: 128, 2: 64, 3: 32, 4: 16, 0: 8}      # 0 はボトルネック
+    CAT_CH = 64
+
+    def __init__(self, out_channels=1, aux_stages=(), aux_channels=64,
+                 use_aspp=False, aspp_branch_ch=64, dilations=(2, 4, 8)):
+        super().__init__(out_channels=out_channels)
+        self.aux_stages = tuple(int(x) for x in aux_stages)
+        self.use_aspp = bool(use_aspp)
+
+        def head(ch):
+            return nn.Sequential(
+                nn.Conv2d(ch, aux_channels, kernel_size=3, padding=1),
+                nn.BatchNorm2d(aux_channels), nn.ReLU(inplace=True),
+                nn.Conv2d(aux_channels, out_channels, kernel_size=1))
+
+        # ブランチ別の監督ヘッド（SupAttnPB と同じ）
+        self.aux_heads = nn.ModuleDict({
+            f"{st}_{br}": head(self.BRANCH_CH[st])
+            for st in self.aux_stages for br in ("slope", "curv")})
+        # ブランチ別 ASPP
+        self.aspp = nn.ModuleDict({
+            f"{st}_{br}": _ASPP(self.BRANCH_CH[st], branch_ch=aspp_branch_ch,
+                                dilations=dilations)
+            for st in (self.aux_stages if use_aspp else ())
+            for br in ("slope", "curv")})
+
+        # 各経路を CAT_CH に揃える 1x1（入力チャネルは源によって違う）
+        src_ch = {0: 1024, 1: 128, 2: 256, 3: 512, 4: 1024}      # スキップ側
+        dec_ch = self.CAT_CH * 5                                  # デコーダ段の出力
+        self.lat = nn.ModuleDict()
+        for d in (4, 3, 2, 1):
+            for src in (0, 1, 2, 3, 4):
+                if src != 0 and src > d:
+                    continue                 # 自分より深い段のスキップは使わない
+                                             # （深い側はデコーダ出力として入ってくる）
+                ch = src_ch[src] if (src == 0 or src >= d) else src_ch[src]
+                self.lat[f"d{d}_s{src}"] = nn.Sequential(
+                    nn.Conv2d(ch, self.CAT_CH, kernel_size=3, padding=1, bias=False),
+                    nn.BatchNorm2d(self.CAT_CH), nn.ReLU(inplace=True))
+            for deeper in (4, 3, 2):
+                if deeper <= d:
+                    continue
+                self.lat[f"d{d}_dec{deeper}"] = nn.Sequential(
+                    nn.Conv2d(dec_ch, self.CAT_CH, kernel_size=3, padding=1, bias=False),
+                    nn.BatchNorm2d(self.CAT_CH), nn.ReLU(inplace=True))
+
+        self.dec = nn.ModuleDict({
+            f"d{d}": nn.Sequential(
+                nn.Conv2d(dec_ch, dec_ch, kernel_size=3, padding=1, bias=False),
+                nn.BatchNorm2d(dec_ch), nn.ReLU(inplace=True))
+            for d in (4, 3, 2, 1)})
+        self.out_conv = nn.Conv2d(dec_ch, out_channels, kernel_size=1)
+
+    @classmethod
+    def _lateral(cls, conv, x, size):
+        """チャネルを CAT_CH に落としてから目標解像度に合わせる。
+
+        順序が効く。拡大する経路（深い段 → 浅い段）でリサイズを先にすると、
+        1024ch を 128x128 に広げてから畳み込むことになり、計算もメモリも
+        桁違いに重くなる。縮小する経路は先にリサイズするほうが安い。
+        """
+        if x.shape[-1] < size:
+            return cls._resize(conv(x), size)        # 拡大: 畳み込み → 拡大
+        return conv(cls._resize(x, size))            # 縮小: 縮小 → 畳み込み
+
+    @staticmethod
+    def _resize(x, size):
+        if x.shape[-1] == size:
+            return x
+        if x.shape[-1] > size:
+            return F.adaptive_max_pool2d(x, size)
+        return F.interpolate(x, size=(size, size), mode="bilinear", align_corners=False)
+
+    def forward(self, dem, air, return_aux=False):
+        slope1 = self.slope_enc1(dem)
+        slope2 = self.slope_enc2(self.slope_pool1(slope1))
+        slope3 = self.slope_enc3(self.slope_pool2(slope2))
+        slope4 = self.dropout2(self.slope_enc4(self.slope_pool3(slope3)))
+
+        curv1 = self.curv_enc1(air)
+        curv2 = self.curv_enc2(self.curv_pool1(curv1))
+        curv3 = self.curv_enc3(self.curv_pool2(curv2))
+        curv4 = self.dropout2(self.curv_enc4(self.curv_pool3(curv3)))
+
+        sl = {1: slope1, 2: slope2, 3: slope3, 4: slope4}
+        cv = {1: curv1, 2: curv2, 3: curv3, 4: curv4}
+
+        bottleneck = self.dropout(self.bottleneck(
+            torch.cat([self.slope_pool4(slope4), self.curv_pool4(curv4)], dim=1)))
+
+        # ブランチ別に ASPP → 監督 → 変調（指定した段だけ）
+        aux = {}
+        for st in self.aux_stages:
+            for br, store in (("slope", sl), ("curv", cv)):
+                f = store[st]
+                if self.use_aspp:
+                    f = f + self.aspp[f"{st}_{br}"](f)
+                logits = self.aux_heads[f"{st}_{br}"](f)
+                aux[f"{st}_{br}"] = logits
+                store[st] = f * (1.0 + torch.sigmoid(logits))
+
+        skips = {0: bottleneck}
+        for k in (1, 2, 3, 4):
+            skips[k] = torch.cat([sl[k], cv[k]], dim=1)
+
+        # 全スケール結合。深い段から順に作る
+        outs = {}
+        for d in (4, 3, 2, 1):
+            size = self.SCALE[d]
+            parts = []
+            for src in (0, 1, 2, 3, 4):
+                if src != 0 and src > d:
+                    continue
+                parts.append(self._lateral(self.lat[f"d{d}_s{src}"], skips[src], size))
+            for deeper in (4, 3, 2):
+                if deeper <= d:
+                    continue
+                parts.append(self._lateral(self.lat[f"d{d}_dec{deeper}"],
+                                           outs[deeper], size))
+            outs[d] = self.dec[f"d{d}"](torch.cat(parts, dim=1))
+
+        out = self.out_conv(outs[1])
+        return (out, aux) if return_aux else out
+
+
 MODEL_CLASSES = {
     "UNet": UNet,
     "MultiEncoderUNet": MultiEncoderUNet,
@@ -1155,13 +1329,23 @@ MODEL_CLASSES = {
     "ASPPDeepSupMultiEncoderUNet": ASPPDeepSupMultiEncoderUNet,
     "ASPPStride8MultiEncoderUNet": ASPPStride8MultiEncoderUNet,
     "ASPPStride4MultiEncoderUNet": ASPPStride4MultiEncoderUNet,
+    "FullSkipMultiEncoderUNet": FullSkipMultiEncoderUNet,
 }
 
 
-def build_model(class_name):
+def build_model(class_name, **kwargs):
+    """モデルを作る。kwargs はそのクラスの __init__ が受け取るものだけ渡す。
+
+    条件ごとに aux_stages / use_aspp などが違うので、ノートブックから
+    build_model(arch, aux_stages=..., use_aspp=...) と渡せるようにしてある。
+    受け取らないクラスに渡しても無視する（既存条件のコードを変えずに済む）。
+    """
+    import inspect
     if class_name not in MODEL_CLASSES:
         raise KeyError(f"未知のモデルクラス: {class_name}")
-    return MODEL_CLASSES[class_name]()
+    cls = MODEL_CLASSES[class_name]
+    ok = set(inspect.signature(cls.__init__).parameters)
+    return cls(**{k: v for k, v in kwargs.items() if k in ok})
 
 
 def load_weights(model, checkpoint_path, device="cpu"):

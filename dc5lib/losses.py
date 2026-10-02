@@ -65,7 +65,7 @@ WEIGHT_KEYS = ("a0", "p", "center_lam")
 
 # 深層監督の補助損失の重み（損失そのものには渡さない）。
 # DeepSupMultiEncoderUNet のように補助出力を持つモデルでだけ使う。
-AUX_KEYS = ("aux_lambda", "aux_stages")
+AUX_KEYS = ("aux_lambda", "aux_stages", "use_aspp")
 
 
 def _spec(cond):
@@ -128,6 +128,11 @@ def aux_stages(cond) -> tuple:
     """
     v = _spec(cond).get("aux_stages")
     return tuple(int(x) for x in v) if v else (1, 2, 3)
+
+
+def use_aspp(cond) -> bool:
+    """スキップに ASPP を入れるか。FullSkipMultiEncoderUNet で使う。"""
+    return bool(_spec(cond).get("use_aspp", False))
 
 
 def describe(cond) -> str:
