@@ -105,9 +105,9 @@ def main():
 
     conds = [config.BY_NAME[n] for n in ATTENTION_CONDITIONS]
     frames = []
-    for pkl_path, group in config.group_by_pkl(conds, args.region).items():
+    for (pkl_path, bg_ratio), group in config.group_by_pkl(conds, args.region).items():
         print(f"\n[{args.region}] {os.path.basename(pkl_path)}")
-        tiles = build_tileset(pkl_path, args.region, True)
+        tiles = build_tileset(pkl_path, args.region, True, bg_ratio=bg_ratio)
         for c in group:
             print(f"  → {c.name}")
             frames.append(run(c, tiles, device, args.batch_size))

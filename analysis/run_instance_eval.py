@@ -145,10 +145,10 @@ def main():
         if not todo:
             print(f"[{region}] 済み。--force で再計算")
             continue
-        for pkl_path, group in config.group_by_pkl(todo, region).items():
+        for (pkl_path, bg_ratio), group in config.group_by_pkl(todo, region).items():
             need_air = any(c.use_airphoto for c in group)
             print(f"\n[{region}] {os.path.basename(pkl_path)}")
-            tiles = build_tileset(pkl_path, region, need_air)
+            tiles = build_tileset(pkl_path, region, need_air, bg_ratio=bg_ratio)
             for c in group:
                 print(f"  → {c.name}")
                 df, inst = run_condition(c, tiles, device, args.batch_size,
