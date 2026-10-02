@@ -146,6 +146,8 @@ def main():
     if f.exists():
         for r in csv.DictReader(open(f, encoding="utf-8")):
             cond = r["condition"]
+            if cond not in run_id:  # --conditions で絞ったとき、report の他条件は飛ばす
+                continue
             for col, (region, tileset) in {
                     "広島_全件相当": ("hiroshima", "背景込み"),
                     "島根_警戒のみ": ("shimane", "警戒のみ")}.items():
