@@ -104,10 +104,16 @@ EXCLUDED = {c.name: c.note for c in _registry.load_all(include_excluded=True)
 
 
 def group_by_pkl(conditions, region):
-    """同じpklを使う条件をまとめる（大きなpklを何度も読み直さないため）。"""
+    """同じpklかつ同じ bg_ratio の条件をまとめる（大きなpklを何度も読まないため）。
+
+    bg_ratio が違うとテスト集合が変わる（analysis/data.py の
+    hiroshima_test_indices を参照）ので、まとめてはいけない。
+    キーは (pklのパス, bg_ratio)。
+    """
     groups = {}
     for c in conditions:
-        groups.setdefault(c.pkl(region), []).append(c)
+        groups.setdefault((c.pkl(region), float(getattr(c, "bg_ratio", 0.0) or 0.0)),
+                          []).append(c)
     return groups
 
 

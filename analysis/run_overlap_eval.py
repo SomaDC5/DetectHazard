@@ -79,13 +79,19 @@ def mosaic(ds, cell, gi, gj, k):
     return D, A, bool(ok.all())
 
 
-def target_tiles(ds, region):
-    """評価対象のタイル。広島は学習時と同じホールドアウト、島根は全件。"""
+def target_tiles(ds, region, bg_ratio=0.0):
+    """評価対象のタイル。広島は学習時と同じホールドアウト、島根は全件。
+
+    bg_ratio > 0 のときは背景タイルを混ぜてから分割しないとずれる
+    （analysis/data.py の hiroshima_test_indices を参照）。
+    """
     if region == "shimane":
         return list(range(len(ds.No)))
+    from analysis.data import hiroshima_test_indices
     hz = [k for k in range(len(ds.No)) if np.max(np.asarray(ds.Mask[k])) >= 1]
-    _, idx = train_test_split(np.arange(len(hz)), test_size=0.2, random_state=42)
-    return [hz[i] for i in idx]
+    bgs = [k for k in range(len(ds.No)) if np.max(np.asarray(ds.Mask[k])) < 1]
+    hp, bp = hiroshima_test_indices(len(hz), bg_ratio, len(bgs))
+    return [hz[i] for i in hp] + [bgs[i] for i in bp]
 
 
 def prep_mask(ds, k):
@@ -106,7 +112,7 @@ def evaluate(cond, region, device, verbose=True):
         print(f"  読み込み: {os.path.basename(pkl)} ...", flush=True)
     ds = load_pkl(pkl)
     gi, gj, cell = grid_index(ds)
-    tiles = target_tiles(ds, region)
+    tiles = target_tiles(ds, region, float(getattr(cond, "bg_ratio", 0.0) or 0.0))
     W = cos_window()
     if verbose:
         print(f"  {len(tiles)} タイル", flush=True)

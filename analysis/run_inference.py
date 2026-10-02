@@ -70,11 +70,11 @@ def main():
         if not todo:
             continue
 
-        for pkl_path, group in config.group_by_pkl(todo, region).items():
+        for (pkl_path, bg_ratio), group in config.group_by_pkl(todo, region).items():
             need_air = any(c.use_airphoto for c in group)
             print(f"\n[{region}] {os.path.basename(pkl_path)} を使う条件: "
                   f"{', '.join(c.name for c in group)}")
-            tiles = build_tileset(pkl_path, region, need_air)
+            tiles = build_tileset(pkl_path, region, need_air, bg_ratio=bg_ratio)
 
             for c in group:
                 print(f"  → {c.name}")
