@@ -186,7 +186,8 @@ def main():
                       f"{s['箇所Recall']:>8.4f}{s['箇所Precision']:>8.4f}{s['箇所F値']:>8.4f}")
                 if not args.record or rule == "従来":
                     continue      # 従来の値は run_inference.py 側が記録済み
-                tileset = "全件" if region == "shimane" else "警戒のみ"
+                tileset = dc5results.tileset_label(
+                    region, float(getattr(cond, "bg_ratio", 0.0) or 0.0))
                 dc5results.record_eval(
                     run_id=run_id, condition=name, region=region, tileset=tileset,
                     scope="オーバーラップ", metric_kind="面積",
