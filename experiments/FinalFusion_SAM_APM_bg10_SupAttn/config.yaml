@@ -27,7 +27,6 @@ train:
   lr: 0.0001
   seed: 42
   early_stop_patience: 100   # 検証F1がこのエポック数だけ更新されなければ打ち切る
-  early_stop_patience: 100
   split: 6:2:2 (train_test_split test_size=0.2 -> 0.25, random_state=42)
   model_selection: 検証データのF値が最良のエポック
   loss:

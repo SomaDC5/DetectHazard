@@ -137,8 +137,8 @@ def main():
             r = {k: (float(v) if k not in ("region", "condition", "label") and v not in ("", None)
                      else v) for k, v in r.items()}
             region = r["region"]
-            tileset = {"hiroshima": "警戒のみ", "shimane": "全件",
-                       "hiroshima_bg": "背景のみ"}.get(region, region)
+            tileset = results.tileset_label(
+                region, getattr(conds.get(r["condition"]), "bg_ratio", 0.0))
             area(r, r["condition"], region, tileset, "")
 
     # 地域 x 集合を揃えた面積評価
@@ -146,6 +146,8 @@ def main():
     if f.exists():
         for r in csv.DictReader(open(f, encoding="utf-8")):
             cond = r["condition"]
+            if cond not in run_id:  # --conditions で絞ったとき、report の他条件は飛ばす
+                continue
             for col, (region, tileset) in {
                     "広島_全件相当": ("hiroshima", "背景込み"),
                     "島根_警戒のみ": ("shimane", "警戒のみ")}.items():
@@ -168,8 +170,8 @@ def main():
             if cond not in run_id:  # --conditions で絞ったとき、report の他条件は飛ばす
                 continue
             region = r["region"]
-            tileset = {"hiroshima": "警戒のみ", "shimane": "全件",
-                       "hiroshima_bg": "背景のみ"}.get(region, region)
+            tileset = results.tileset_label(
+                region, getattr(conds.get(cond), "bg_ratio", 0.0))
             results.record_eval(
                 run_id=run_id[cond], condition=cond, region=region, tileset=tileset,
                 scope="通常", metric_kind="箇所", setting=r["設定"],
