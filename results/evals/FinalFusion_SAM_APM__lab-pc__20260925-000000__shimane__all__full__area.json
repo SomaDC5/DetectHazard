@@ -1,0 +1,18 @@
+{
+ "condition": "FinalFusion_SAM_APM",
+ "eval_id": "FinalFusion_SAM_APM__lab-pc__20260925-000000__shimane__all__full__area",
+ "evaluated_at": "2026-09-26T00:00:00",
+ "f1": 0.5381,
+ "machine": "SomanoMacBook-Air",
+ "metric_kind": "面積",
+ "n_tiles": 24569.0,
+ "note": "tileanalysis による再推論。ノートブック出力と F値 0.0001 以内で一致",
+ "precision": 0.5698,
+ "recall": 0.5097,
+ "region": "shimane",
+ "run_id": "FinalFusion_SAM_APM__lab-pc__20260925-000000",
+ "scope": "通常",
+ "setting": "",
+ "tileset": "全件",
+ "weights_sha256": "5f5244af59d70b1ea82f746ef603d8ffbf61c7c274d2f3f2d33fcd53bc46f935"
+}
