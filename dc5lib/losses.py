@@ -142,6 +142,7 @@ def describe(cond) -> str:
     p.update({k: v for k, v in spec.items() if k != "type" and v is not None})
     lam = p.pop("aux_lambda", None)
     stg = p.pop("aux_stages", None)
+    asp = p.pop("use_aspp", None)      # モデル側の設定。criterion の引数ではない
     body = ", ".join(f"{k}={v}" for k, v in p.items())
     _, needs = build_loss(cond)
     out = f"{kind}({body})"
@@ -149,6 +150,8 @@ def describe(cond) -> str:
         out += f" + {lam}*深層監督"
         if stg:
             out += f"(段 {','.join(str(x) for x in stg)})"
+    if asp:
+        out += " / スキップに ASPP"
     return out + ("  ※重みマップが必要" if needs else "")
 
 
