@@ -18,7 +18,7 @@ inputs:
 augment: false
 bg_ratio: 0.0
 status: excluded
-label: ''
+label: Final SAM+APM（旧プロトコル・対象外）
 note: 指示書で解析対象外。旧プロトコル（検証分割なし）
 dataset:
   Hiroshima: hiroshima_sam_apm.pkl

@@ -62,8 +62,15 @@ def _save(fig, name):
 
 
 def _ordered(df, col="condition"):
-    present = [c for c in ORDER if c in set(df[col])]
-    return present
+    """図の並び順。ORDER に載っていない条件は末尾に回す。
+
+    以前は ORDER に無い条件を黙って捨てていたため、
+    新しく学習した条件が図から消えていた。条件は増えていくので、
+    知らない名前が来ても落とさない。
+    """
+    have = list(dict.fromkeys(df[col]))
+    present = [c for c in ORDER if c in have]
+    return present + [c for c in have if c not in ORDER]
 
 
 # ------------------------------------------------------------------ 図
@@ -155,8 +162,8 @@ def fig_strata(data, strat_df, varname, title, name):
 
 def fig_shimane_background(matched, summary_s):
     conds = _ordered(matched)
-    m = matched.set_index("condition").loc[conds]
-    s = summary_s.set_index("condition").loc[conds]
+    m = matched.set_index("condition").reindex(conds)
+    s = summary_s.set_index("condition").reindex(conds)
     y = np.arange(len(conds))
     fig, axes = plt.subplots(1, 2, figsize=(14.5, 6.4))
 
@@ -193,7 +200,7 @@ def fig_error_ring(errdf):
     fig, ax = plt.subplots(figsize=(11, 6.2))
     y = np.arange(len(conds))
     for i, region in enumerate(regions):
-        e = errdf[errdf["region"] == region].set_index("condition").loc[conds]
+        e = errdf[errdf["region"] == region].set_index("condition").reindex(conds)
         ax.barh(y + (i - 0.5) * 0.38, e["リング誤差の集中度"], height=0.36,
                 color=REGION_COLOR[region], label=REGION_JA[region])
         labels = e["label"]
@@ -215,7 +222,7 @@ def fig_fn_share(errdf):
     fig, ax = plt.subplots(figsize=(11, 6.2))
     y = np.arange(len(conds))
     for i, region in enumerate(regions):
-        e = errdf[errdf["region"] == region].set_index("condition").loc[conds]
+        e = errdf[errdf["region"] == region].set_index("condition").reindex(conds)
         ax.barh(y + (i - 0.5) * 0.38, e["FN割合"] * 100, height=0.36,
                 color=REGION_COLOR[region], label=REGION_JA[region])
         labels = e["label"]
@@ -307,7 +314,7 @@ def fig_attention(regions):
 def fig_region_matrix(rm):
     """地域 × テスト集合の作り方 で F値を並べる。"""
     conds = _ordered(rm)
-    d = rm.set_index("condition").loc[conds]
+    d = rm.set_index("condition").reindex(conds)
     y = np.arange(len(conds))
     series = [
         ("広島 警戒区域ありのみ (2,964)", "広島_警戒のみ_f1", BLUE, 0.85),
@@ -494,7 +501,7 @@ def main():
 
     lines += ["## 1. 条件ごとの集計", "",
               "micro = 画素単位（従来どおり）、macro = タイルごとにF値を出して平均。", ""]
-    for region in regions:
+    for region in (regions if not summary.empty and "region" in summary else []):
         s = summary[summary["region"] == region]
         lines += [f"### {REGION_JA[region]}", "",
                   md_table(s, ["label", "n_tiles", "n_tiles_with_gt", "通常_recall",
@@ -541,7 +548,7 @@ def main():
     lines += ["## 3. 同じタイル上での対比較", "",
               "正解を含むタイルだけを対象に、タイルごとのF値の差を取ったもの。",
               "「改善」「悪化」は差が ±0.01 を超えたタイル数。", ""]
-    if "region" not in pairs_df.columns:
+    if pairs_df.empty or "region" not in pairs_df.columns:
         # analyze.PAIRS に載っている組のタイルが両方そろっていないとき。
         # PC を移ると旧条件のタイルがキャッシュに無く、ここが空になる。
         lines += ["対比較できる組がありません（`analysis/analyze.py` の `PAIRS` の",
@@ -563,7 +570,7 @@ def main():
     lines += ["## 5. 誤差の内訳", "",
               "「リング誤差の集中度」は、境界16pxのリングに落ちた誤差の割合を",
               "リングの面積割合（43.75%）で割ったもの。1.0 なら偏りなし。", ""]
-    for region in regions:
+    for region in (regions if not err_df.empty and "region" in err_df else []):
         e = err_df[err_df["region"] == region]
         lines += [f"### {REGION_JA[region]}", "",
                   md_table(e, ["label", "見逃しFN", "過検出FP", "FN割合",
