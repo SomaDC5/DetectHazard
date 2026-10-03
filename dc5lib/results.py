@@ -125,6 +125,26 @@ def record_eval(*, run_id, condition, region, tileset, scope, metric_kind,
            "evaluated_at": fields.pop("evaluated_at", time.strftime("%Y-%m-%dT%H:%M:%S")),
            "machine": fields.pop("machine", paths.machine_name())}
     rec.update(fields)
+    # 同じ測定（条件・地域・集合・評価軸・設定が同一）の古い記録を取り除く。
+    # run_id に機械名と日時が入るので、別のPCで評価し直すと eval_id が変わり、
+    # 放っておくと metrics.csv に同じ測定が2行並んでしまう。
+    key = (condition, region, tileset, scope, metric_kind, setting)
+    superseded = []
+    for old in paths.results_dir("evals").glob("*.json"):
+        if old.name.startswith("._") or old.stem == eval_id:
+            continue
+        try:
+            o = json.loads(old.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if (o.get("condition"), o.get("region"), o.get("tileset"), o.get("scope"),
+                o.get("metric_kind"), o.get("setting", "")) == key:
+            old.unlink()
+            superseded.append(old.stem)
+    if superseded:
+        print(f"[results] 同じ測定の古い記録を置き換えました: {len(superseded)} 件 "
+              f"({superseded[0][:50]}…)")
+
     p = paths.results_dir("evals") / f"{eval_id}.json"
     p.write_text(json.dumps(rec, ensure_ascii=False, indent=1, sort_keys=True),
                  encoding="utf-8")
@@ -162,6 +182,22 @@ def build_metrics_csv() -> Path:
     衝突したらこれを実行して上書きすればよい。
     """
     rows = load_evals()
+
+    # 安全網：同じ測定が複数残っていたら、評価日時の新しいほうだけを使う。
+    # record_eval で古いものは消しているが、git の checkout などで
+    # 消したはずのファイルが復活することがある。
+    latest = {}
+    for r in rows:
+        key = (r.get("condition"), r.get("region"), r.get("tileset"),
+               r.get("scope"), r.get("metric_kind"), r.get("setting", ""))
+        cur = latest.get(key)
+        if cur is None or str(r.get("evaluated_at", "")) >= str(cur.get("evaluated_at", "")):
+            latest[key] = r
+    if len(latest) != len(rows):
+        print(f"[results] 同じ測定が重複していたので、新しいほうを採用しました: "
+              f"{len(rows) - len(latest)} 件")
+    rows = list(latest.values())
+
     rows.sort(key=lambda r: (r.get("condition", ""), r.get("region", ""),
                              r.get("tileset", ""), r.get("metric_kind", ""),
                              r.get("scope", ""), r.get("setting", ""),

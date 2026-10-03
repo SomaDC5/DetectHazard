@@ -117,7 +117,19 @@ class Condition:
             inputs = self.inputs[0].source + " のみ"
         else:
             inputs = "+".join(i.source for i in self.inputs)
-        return f"{'拡張+' if self.augment else ''}{fam} {inputs}"
+        base = f"{'拡張+' if self.augment else ''}{fam} {inputs}"
+        # 損失が既定と違うなら、それも名前に出す。
+        # そうしないと「損失だけ違う条件」が同じラベルになり、
+        # 図や表で区別できなくなる。
+        loss = (self.train or {}).get("loss") or {}
+        kind = loss.get("type", "focal_tversky")
+        if kind == "instance_weighted_focal_tversky":
+            base += f" 箇所損失p{loss.get('p', '?')}"
+        elif kind != "focal_tversky":
+            base += f" {kind}"
+        if self.bg_ratio:
+            base += f" bg{self.bg_ratio}"
+        return base
 
 
 def load_one(config_path: Path) -> Condition:
@@ -176,9 +188,24 @@ def _check_unicode_paths():
     return problems
 
 
+def _check_labels():
+    """図表に出す表示ラベルが重複していないか。
+
+    重複すると、図の棒や表の行がどの条件のものか区別できなくなる。
+    条件が増えるほど起きやすいので、検査で止める。
+    """
+    import collections
+    seen = collections.defaultdict(list)
+    for c in load_all(include_excluded=True):
+        seen[c.display()].append(c.name)
+    return [f"表示ラベル「{lab}」が {len(v)} 条件で重複しています: {v}"
+            f"（config.yaml の label で区別してください）"
+            for lab, v in seen.items() if len(v) > 1]
+
+
 def check():
     """CI / コミット前に回す検査。異常があれば行を返す。"""
-    problems = _check_unicode_paths()
+    problems = _check_unicode_paths() + _check_labels()
     names = [p.name for p in sorted(paths.experiments_dir().iterdir()) if p.is_dir()]
 
     # exFAT と Windows は大文字小文字を区別しないが、Ubuntu の ext4 は区別する。

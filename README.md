@@ -83,7 +83,7 @@ DetectHazard/
 ├── experiments/<条件名>/
 │   ├── config.yaml         ★ 条件の定義。フォルダを足せば条件が増える
 │   └── *.ipynb             学習・評価ノートブック
-├── analysis/               タイル単位の再解析ツール
+├── analysis/               タイル単位の再解析ツール（解説は docs/解析ツールの解説.md）
 ├── results/                ★ 精度の一括管理
 ├── docs/                   設計メモ・発表資料・引き継ぎ
 │   └── FSS_analysis_参考/  前任の解析プログラム（参照用。動かすものではない）

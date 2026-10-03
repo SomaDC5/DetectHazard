@@ -279,6 +279,41 @@ def check_res_border(m, L):
     return out
 
 
+def check_data_counts(m, L):
+    """データのスライド：枚数と陽性画素の割合。
+
+    陽性画素率は tp+fn が要る。metrics.csv に入っていなければ「不可」にする。
+    """
+    t = plain("data")
+    out = []
+    for region, ts, tag, n_claim in (("hiroshima", "警戒のみ", "広島", None),
+                                     ("shimane", "全件", "島根", None)):
+        vs = [col(m, c.name, region, ts, "n_tiles") for c in registry.load_all()]
+        vs = [v for v in vs if v is not None]
+        if vs:
+            n = vs[0]
+            if str(int(n)) in t.replace(",", ""):
+                out.append(("data", f"{tag} テスト枚数", float(int(n)), float(int(n)),
+                            None, "枚"))
+    # 陽性画素の割合
+    for region, ts, tag in (("hiroshima", "警戒のみ", "9.33"),
+                            ("shimane", "全件", "3.58")):
+        tp = fn = n = None
+        for c in registry.load_all():
+            tp = col(m, c.name, region, ts, "tp")
+            fn = col(m, c.name, region, ts, "fn")
+            n = col(m, c.name, region, ts, "n_tiles")
+            if tp is not None and fn is not None and n:
+                break
+        if tp is None or fn is None or not n:
+            out.append(("data", f"陽性画素の割合 {tag}%", float(tag), None, "不可",
+                        "metrics.csv に tp/fn が無い"))
+        else:
+            out.append(("data", f"陽性画素の割合 {tag}%", float(tag),
+                        100 * (tp + fn) / (n * 128 * 128), None, "%"))
+    return out
+
+
 def check_curves():
     """最良エポックの範囲（拡張なし 26〜73 / 拡張あり 693〜897）。"""
     out = []
@@ -307,7 +342,6 @@ def check_curves():
 
 # metrics.csv だけでは再計算できないもの
 UNVERIFIABLE = [
-    ("data", "陽性画素の割合 9.33% / 3.58%", "tp+fn が必要。metrics.csv の tp/fp/fn が空"),
     ("res_background", "背景タイルの誤検出率・1タイルあたり過検出画素", "タイル単位のCSVが必要"),
     ("res_errors", "境界リングへの誤差の集中度・面積別の表", "タイル単位のCSVが必要"),
     ("res_where", "正解面積別・傾斜別のタイル平均F値", "タイル単位のCSVが必要"),
@@ -326,7 +360,7 @@ def main():
     m = load_metrics()
     L = label_map()
     rows = []
-    for fn in (check_res_all, check_res_fusion, check_res_aug,
+    for fn in (check_data_counts, check_res_all, check_res_fusion, check_res_aug,
                check_res_gen, check_res_matched, check_res_border):
         try:
             rows += fn(m, L)
@@ -348,6 +382,8 @@ def main():
         else:
             diff = got - claimed
             tol = a.tol if abs(claimed) < 100 else 0.51
+            if note == "%":
+                tol = 0.005
             verdict = "OK" if abs(diff) <= tol else "NG"
             ok += verdict == "OK"
             ng += verdict == "NG"
