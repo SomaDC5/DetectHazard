@@ -44,6 +44,7 @@ _SAFE = re.compile(r"[^A-Za-z0-9_.-]")
 _TOKENS = {
     # tileset
     "警戒のみ": "gtonly", "背景込み": "withbg", "全件": "all", "背景のみ": "bgonly",
+    "警戒+背景": "gtbg",
     # scope
     "通常": "full", "境界": "center",
     # metric_kind
@@ -94,6 +95,20 @@ def new_eval_id(run_id: str, region: str, tileset: str, scope: str,
     return "__".join(_token(p) for p in parts)
 
 
+def tileset_label(region: str, bg_ratio: float = 0.0) -> str:
+    """その地域・その条件で、実際に評価したタイル集合の呼び名。
+
+    bg_ratio > 0 の条件は、学習ノートブックが背景タイルを混ぜてから分割するので、
+    広島のテスト集合にも背景タイルが入る（警戒あり2,946 + 背景484 = 3,430枚）。
+    「警戒のみ」と記録すると実態と食い違うので分けておく。
+    """
+    if region == "shimane":
+        return "全件"
+    if region == "hiroshima_bg":
+        return "背景のみ"
+    return "警戒+背景" if bg_ratio and bg_ratio > 0 else "警戒のみ"
+
+
 def record_run(condition: str, *, run_id: str | None = None, **fields) -> Path:
     """1回の学習を記録する。"""
     run_id = run_id or new_run_id(condition)
@@ -112,7 +127,9 @@ def record_eval(*, run_id, condition, region, tileset, scope, metric_kind,
     """1つの評価を記録する。
 
     region      hiroshima / hiroshima_bg / shimane
-    tileset     警戒のみ / 背景込み / 全件
+    tileset     警戒のみ / 警戒+背景 / 背景込み / 全件 / 背景のみ
+                bg_ratio > 0 の条件は広島でも背景タイルが混ざるので「警戒+背景」。
+                tileset_label() で決めること
     scope       通常 / 境界
     metric_kind 面積 / 箇所
     setting     箇所数評価の対応づけ方式など（面積評価なら空）

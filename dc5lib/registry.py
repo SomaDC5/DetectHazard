@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,6 +42,31 @@ class Input:
     def __post_init__(self):
         if not self.field:
             self.field = {"terrain": "DEM", "airphoto": "AirPhoto"}.get(self.key, self.key)
+
+
+
+# 構造の短い呼び名。ここに無い構造はクラス名から機械的に作るので、
+# 新しいモデルを足したときに書き忘れても表示名は壊れない。
+# 値が "" のものは「その系統の標準の構造」で、表示名には出さない。
+ARCH_JA = {
+    "UNet": "", "EarlyFusionUNet": "", "MiddleFusionUNet": "",
+    "MultiEncoderUNet": "", "AttentionMultiEncoderUNet": "", "TransUNetDual": "",
+    "FullSkipMultiEncoderUNet": "全スケール結合",
+    "AllSkipDeepSupMultiEncoderUNet": "全スキップ+深層監督",
+    "DeepSupMultiEncoderUNet": "深層監督",
+    "ASPPDeepSupMultiEncoderUNet": "ASPP+深層監督",
+    "ASPPStride4MultiEncoderUNet": "ASPP+ストライド4",
+    "ASPPStride8MultiEncoderUNet": "ASPP+ストライド8",
+    "SupAttnMultiEncoderUNet": "監督Attention",
+    "SupAttnPerBranchMultiEncoderUNet": "監督Attention(枝別)",
+}
+
+
+def arch_tag(arch: str) -> str:
+    """構造の短い呼び名。未登録ならクラス名から接尾辞を落として使う。"""
+    if arch in ARCH_JA:
+        return ARCH_JA[arch]
+    return re.sub(r"(MultiEncoder)?UNet(Dual)?$", "", arch) or arch
 
 
 @dataclass
@@ -129,6 +155,18 @@ class Condition:
             base += f" {kind}"
         if self.bg_ratio:
             base += f" bg{self.bg_ratio}"
+        # 構造が系統の標準と違うなら、それも名前に出す。
+        # 同じクラスでも補助出力やASPPの有無で別条件になるので、そこも拾う。
+        parts = []
+        tag = arch_tag(self.arch)
+        if tag:
+            parts.append(tag)
+        if loss.get("aux_stages") and "監督" not in tag:
+            parts.append("監督")
+        if loss.get("use_aspp") and "ASPP" not in tag:
+            parts.append("ASPP")
+        if parts:
+            base += " " + "+".join(parts)
         return base
 
 

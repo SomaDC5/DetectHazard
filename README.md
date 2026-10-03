@@ -34,11 +34,37 @@
 git clone https://github.com/SomaDC5/DetectHazard.git
 cd DetectHazard
 conda env create -f environment.yml && conda activate dc5
-# PyTorch は CUDA の有無で入れ分ける（environment.yml のコメント参照）
 
+python -m dc5lib.device       # GPUが使えるか（GPUのあるPCでは必ず見る）
 python -m dc5lib.paths        # SSDが見つかるか確認
 python -m dc5lib.registry     # 条件の一覧と重みの有無
 ```
+
+**PyTorch は `environment.yml` だけで入る。** conda-forge の `torchvision` が
+連れてくるので、別に入れ直す必要は普通ない。GPUのあるPCでは CUDA ビルドが入る。
+
+**ただし、入ったビルドが自分のGPUの世代に対応しているかは確かめること。**
+
+```bash
+python -c "import torch; print(torch.cuda.get_arch_list())"
+```
+
+ここに自分のGPUの `sm_XX` が無いと、`torch.cuda.is_available()` は **True のまま**
+実行時に `no kernel image is available for execution on the device` で落ちる。
+`is_available()` だけ見ても気づけないので、必ず arch list のほうを見る。
+
+| GPU | 世代 | 要る `sm_` | 最低の CUDA |
+|---|---|---|---|
+| RTX 30xx | Ampere | `sm_86` | 11.1 |
+| RTX 40xx | Ada | `sm_89` | 11.8 |
+| RTX 50xx | Blackwell | `sm_120` | **12.8** |
+
+無かったときだけ入れ直す。**CUDA のバージョンを決め打ちにしないこと。**
+GPUを買い替えた瞬間に壊れる。
+
+> 以前ここには `pytorch-cuda=12.1` と書いてあったが、**RTX 5080（研究室PC 1）では
+> これでは動かない。** 12.1 のビルドに `sm_120` が入っていないため。
+> いまは `environment.yml` だけで CUDA 13.0 ビルドが入り、そのまま動いている。
 
 **外部SSDを挿すだけで動く。** パスの設定は要らない。
 

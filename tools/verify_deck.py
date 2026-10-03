@@ -175,8 +175,35 @@ def check_res_aug(m, L):
     return out
 
 
-DUAL = [c.name for c in registry.load_all() if c.use_airphoto and "InstLoss" not in c.name]
-SINGLE = [c.name for c in registry.load_all() if not c.use_airphoto]
+# スライドが対象にしている条件。**固定**にしてある。
+#
+# ここを registry.load_all() から動的に作ると、あとから条件を足すたびに
+# 平均の母数が変わり、過去のスライドの数値と合わなくなる。
+# スライドは「夏休みまでの14条件」を述べた過去の成果物なので、
+# 検証する側も当時の条件集合に固定するのが正しい。
+DUAL = [
+    "EarlyFusionUNet_DEM_APM", "EarlyFusionUNet_SAM_APM",
+    "MIddleFusion_DEM_APM", "MiddleFusion_SAM_APM",
+    "FinalFusion_DEM_APM", "FinalFusion_SAM_APM",
+    "AttentionUNet_DEM_APM", "AttentionUNet_SAM_APM",
+    "TransUNet_SAM_APM",
+    "DataOgument_FinalFusion_DEM_APM", "DataOgument_FinalFusion_SAM_APM",
+    "DataOgument_AttentionUNet_SAM_APM",
+]
+SINGLE = [
+    "Train_Hiroshima_Test_Shimane_OnlyDEM",
+    "Train_Hiroshima_Test_Shimane_OnlySAM",
+]
+DECK = DUAL + SINGLE
+
+
+def deck_conditions():
+    """スライドの14条件を Condition で返す（登録から引く）。"""
+    byname = {c.name: c for c in registry.load_all(include_excluded=True)}
+    missing = [n for n in DECK if n not in byname]
+    if missing:
+        raise SystemExit("スライドの条件が登録に見つかりません: " + ", ".join(missing))
+    return [byname[n] for n in DECK]
 
 
 def _avg(m, conds, region, tileset, name="f1", scope="通常"):
@@ -257,7 +284,7 @@ def check_res_border(m, L):
     out = []
     for region, ts, tag in (("hiroshima", "警戒のみ", "広島"), ("shimane", "全件", "島根")):
         diffs = []
-        for c in registry.load_all():
+        for c in deck_conditions():
             a = f1(m, c.name, region, ts, "境界")
             b = f1(m, c.name, region, ts, "通常")
             if a is not None and b is not None:
@@ -288,7 +315,7 @@ def check_data_counts(m, L):
     out = []
     for region, ts, tag, n_claim in (("hiroshima", "警戒のみ", "広島", None),
                                      ("shimane", "全件", "島根", None)):
-        vs = [col(m, c.name, region, ts, "n_tiles") for c in registry.load_all()]
+        vs = [col(m, c.name, region, ts, "n_tiles") for c in deck_conditions()]
         vs = [v for v in vs if v is not None]
         if vs:
             n = vs[0]
@@ -299,7 +326,7 @@ def check_data_counts(m, L):
     for region, ts, tag in (("hiroshima", "警戒のみ", "9.33"),
                             ("shimane", "全件", "3.58")):
         tp = fn = n = None
-        for c in registry.load_all():
+        for c in deck_conditions():
             tp = col(m, c.name, region, ts, "tp")
             fn = col(m, c.name, region, ts, "fn")
             n = col(m, c.name, region, ts, "n_tiles")
@@ -318,7 +345,7 @@ def check_curves():
     """最良エポックの範囲（拡張なし 26〜73 / 拡張あり 693〜897）。"""
     out = []
     best = {}
-    for c in registry.load_all():
+    for c in deck_conditions():
         p = paths.results_dir("curves") / f"{c.name}.csv"
         if not p.exists():
             continue
@@ -327,9 +354,8 @@ def check_curves():
         if not colname or d.empty:
             continue
         best[c.name] = int(d.loc[d[colname].idxmax(), "Epoch"])
-    dual_noaug = [c.name for c in registry.load_all()
-                  if c.use_airphoto and not c.augment and "InstLoss" not in c.name]
-    dual_aug = [c.name for c in registry.load_all() if c.use_airphoto and c.augment]
+    dual_noaug = [c.name for c in deck_conditions() if c.use_airphoto and not c.augment]
+    dual_aug = [c.name for c in deck_conditions() if c.use_airphoto and c.augment]
     for tag, conds, claim in (("拡張なし", dual_noaug, (26, 73)),
                               ("拡張あり", dual_aug, (693, 897))):
         vs = [best[c] for c in conds if c in best]

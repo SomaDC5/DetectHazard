@@ -548,12 +548,19 @@ def main():
     lines += ["## 3. 同じタイル上での対比較", "",
               "正解を含むタイルだけを対象に、タイルごとのF値の差を取ったもの。",
               "「改善」「悪化」は差が ±0.01 を超えたタイル数。", ""]
-    for region in (regions if not pairs_df.empty and "region" in pairs_df else []):
-        p = pairs_df[pairs_df["region"] == region]
-        lines += [f"### {REGION_JA[region]}", "",
-                  md_table(p, ["観点", "n", "基準_平均", "比較_平均", "平均差", "中央値差",
-                               "改善タイル数", "悪化タイル数", "大きく改善(>0.1)",
-                               "大きく悪化(<-0.1)", "Wilcoxon_p"]), ""]
+    if pairs_df.empty or "region" not in pairs_df.columns:
+        # analyze.PAIRS に載っている組のタイルが両方そろっていないとき。
+        # PC を移ると旧条件のタイルがキャッシュに無く、ここが空になる。
+        lines += ["対比較できる組がありません（`analysis/analyze.py` の `PAIRS` の",
+                  "基準・比較の両方のタイルが必要です）。`run_inference.py` で",
+                  "両方の条件を推論してから再実行してください。", ""]
+    else:
+        for region in regions:
+            p = pairs_df[pairs_df["region"] == region]
+            lines += [f"### {REGION_JA[region]}", "",
+                      md_table(p, ["観点", "n", "基準_平均", "比較_平均", "平均差", "中央値差",
+                                   "改善タイル数", "悪化タイル数", "大きく改善(>0.1)",
+                                   "大きく悪化(<-0.1)", "Wilcoxon_p"]), ""]
 
     lines += ["## 4. タイルの性質で層別した精度", "", "図を参照。CSV は `stratified_f1.csv`。", "",
               "![](../figures/fig_strata_gtratio.png)", "",

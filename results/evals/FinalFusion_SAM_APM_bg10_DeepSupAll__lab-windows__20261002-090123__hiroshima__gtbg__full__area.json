@@ -1,0 +1,18 @@
+{
+ "condition": "FinalFusion_SAM_APM_bg10_DeepSupAll",
+ "eval_id": "FinalFusion_SAM_APM_bg10_DeepSupAll__lab-windows__20261002-090123__hiroshima__gtbg__full__area",
+ "evaluated_at": "2026-10-02T09:01:23",
+ "f1": 0.6569,
+ "machine": "lab-windows",
+ "metric_kind": "面積",
+ "n_tiles": 3430.0,
+ "note": "tileanalysis による再推論。ノートブック出力と F値 0.0001 以内で一致",
+ "precision": 0.6177,
+ "recall": 0.7013,
+ "region": "hiroshima",
+ "run_id": "FinalFusion_SAM_APM_bg10_DeepSupAll__lab-windows__20261002-090123",
+ "scope": "通常",
+ "setting": "",
+ "tileset": "警戒+背景",
+ "weights_sha256": "70c4c972fdaacedce3ca47e3b193716bdebacb276edc7c2190fefd137657ab15"
+}

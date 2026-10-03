@@ -7,6 +7,7 @@ dc5/DetectHazard 以下のノートブックに書かれているクラス定義
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 def _shared_conv_block(in_ch, out_ch):
@@ -528,6 +529,792 @@ class TransUNetDual(nn.Module):
         return self.out_conv(dec1)
 
 
+# ============================================================
+# 深層監督つき MultiEncoder（スキップ接続に「箇所がある」を教える）
+# ============================================================
+class DeepSupMultiEncoderUNet(MultiEncoderUNet):
+    """MultiEncoderUNet の 64x64 のスキップ接続に、存在マップの監督を足したもの。
+
+    なぜここか（docs/展望.md 2節(c), 5節）
+      ボトルネックは 8x8 = 71.7 m/画素で、300px 以下の箇所はサブピクセルになる。
+      見逃し率はボトルネックでの画素数に対応しており、小さい箇所がデコーダに
+      届く経路はスキップ接続しかない。Attention でゲートを足しても効かなかったのは
+      「ここに箇所がある」という情報を新しく作る圧力が無いためなので、
+      ゲートではなく監督信号を入れる。
+
+    中心点ヒートマップ（CenterNet 風）ではなく存在マップにした理由
+      正解の円形度（4pi*面積/周囲長^2）の中央値は 0.198 で、85.5% が 0.3 未満。
+      警戒区域は斜面の裾を這う細長い帯で、湾曲した帯の重心はしばしば領域の外に
+      落ちる。中心点1ピークでは形も決まらないので、ダウンサンプルした
+      正解マスクそのものを教師にする。
+
+    出力
+      return_aux=False（既定） マスクだけ。推論・評価のコードは変更不要
+      return_aux=True          (マスク, 存在マップ) の2つ。学習ループで使う
+    """
+
+    def __init__(self, out_channels=1, aux_channels=64):
+        super().__init__(out_channels=out_channels)
+        # slope2 / curv2 はどちらも 64x64 x 128ch。結合して 256ch
+        self.aux_head = nn.Sequential(
+            nn.Conv2d(128 * 2, aux_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(aux_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(aux_channels, out_channels, kernel_size=1),
+        )
+
+    def forward(self, dem, air, return_aux=False):
+        slope1 = self.slope_enc1(dem)
+        slope2 = self.slope_enc2(self.slope_pool1(slope1))
+        slope3 = self.slope_enc3(self.slope_pool2(slope2))
+        slope4 = self.slope_enc4(self.slope_pool3(slope3))
+        slope4 = self.dropout2(slope4)
+
+        curv1 = self.curv_enc1(air)
+        curv2 = self.curv_enc2(self.curv_pool1(curv1))
+        curv3 = self.curv_enc3(self.curv_pool2(curv2))
+        curv4 = self.curv_enc4(self.curv_pool3(curv3))
+        curv4 = self.dropout2(curv4)
+
+        # 64x64 のスキップ接続を、そのまま補助ヘッドにも流す
+        skip2 = torch.cat([slope2, curv2], dim=1)
+
+        fused = torch.cat([self.slope_pool4(slope4), self.curv_pool4(curv4)], dim=1)
+        bottleneck = self.bottleneck(fused)
+        bottleneck = self.dropout(bottleneck)
+
+        up4 = self.up4(bottleneck)
+        dec4 = self.dec4(torch.cat([up4, torch.cat([slope4, curv4], dim=1)], dim=1))
+        up3 = self.up3(dec4)
+        dec3 = self.dec3(torch.cat([up3, torch.cat([slope3, curv3], dim=1)], dim=1))
+        up2 = self.up2(dec3)
+        dec2 = self.dec2(torch.cat([up2, skip2], dim=1))
+        up1 = self.up1(dec2)
+        dec1 = self.dec1(torch.cat([up1, torch.cat([slope1, curv1], dim=1)], dim=1))
+
+        out = self.out_conv(dec1)
+        if return_aux:
+            return out, self.aux_head(skip2)
+        return out
+
+
+def downsample_mask(mask, factor=2):
+    """正解マスクを補助ヘッドの解像度に落とす。
+
+    平均ではなく max。2x2 のどれか1画素でも正解なら正例にする。
+    平均にすると小さい箇所の信号が薄まり、「小さい箇所を拾わせる」という
+    狙いと逆に働く。50px(≈7x7) の箇所は 64x64 で約 4x4 画素として残る。
+    """
+    return torch.nn.functional.max_pool2d(mask, kernel_size=factor, stride=factor)
+
+
+class AllSkipDeepSupMultiEncoderUNet(MultiEncoderUNet):
+    """スキップ接続の複数の段に、存在マップの監督を入れたもの。
+
+    DeepSupMultiEncoderUNet は 64x64 の1段だけを監督する。こちらは段を選べる。
+
+      段 | 解像度   | ch   | 50px の箇所
+      ---+---------+------+-------------
+      1  | 128x128 |  128 | 7x7
+      2  |  64x64  |  256 | 4x4
+      3  |  32x32  |  512 | 1.8x1.8
+      4  |  16x16  | 1024 | 0.9x0.9（サブピクセル。既定では使わない）
+
+    細長い構造を全スケールで監督するのは HED（Holistically-nested Edge
+    Detection）と同じ考え方。正解の円形度中央値は 0.198（85.5% が 0.3 未満）
+    で細長いため、相性が良いと考えている。
+
+    補助損失の重みは「合計が aux_lambda になる」ように段数で割る。
+    そうすると 1段だけの条件と補助損失の総圧力が揃い、
+    スケールを分散させた効果だけを比べられる。
+
+    出力
+      return_aux=False（既定） マスクだけ。推論・評価のコードは変更不要
+      return_aux=True          (マスク, {段: 存在マップ}) 。学習ループで使う
+    """
+
+    SKIP_CH = {1: 64 * 2, 2: 128 * 2, 3: 256 * 2, 4: 512 * 2}
+
+    def __init__(self, out_channels=1, aux_stages=(1, 2, 3), aux_channels=64):
+        super().__init__(out_channels=out_channels)
+        self.aux_stages = tuple(int(s) for s in aux_stages)
+        assert all(s in self.SKIP_CH for s in self.aux_stages),             f"aux_stages は {sorted(self.SKIP_CH)} から選ぶ: {self.aux_stages}"
+        self.aux_heads = nn.ModuleDict({
+            str(s): nn.Sequential(
+                nn.Conv2d(self.SKIP_CH[s], aux_channels, kernel_size=3, padding=1),
+                nn.BatchNorm2d(aux_channels),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(aux_channels, out_channels, kernel_size=1),
+            ) for s in self.aux_stages
+        })
+
+    def forward(self, dem, air, return_aux=False):
+        slope1 = self.slope_enc1(dem)
+        slope2 = self.slope_enc2(self.slope_pool1(slope1))
+        slope3 = self.slope_enc3(self.slope_pool2(slope2))
+        slope4 = self.slope_enc4(self.slope_pool3(slope3))
+        slope4 = self.dropout2(slope4)
+
+        curv1 = self.curv_enc1(air)
+        curv2 = self.curv_enc2(self.curv_pool1(curv1))
+        curv3 = self.curv_enc3(self.curv_pool2(curv2))
+        curv4 = self.curv_enc4(self.curv_pool3(curv3))
+        curv4 = self.dropout2(curv4)
+
+        skips = {1: torch.cat([slope1, curv1], dim=1),
+                 2: torch.cat([slope2, curv2], dim=1),
+                 3: torch.cat([slope3, curv3], dim=1),
+                 4: torch.cat([slope4, curv4], dim=1)}
+
+        fused = torch.cat([self.slope_pool4(slope4), self.curv_pool4(curv4)], dim=1)
+        bottleneck = self.dropout(self.bottleneck(fused))
+
+        dec4 = self.dec4(torch.cat([self.up4(bottleneck), skips[4]], dim=1))
+        dec3 = self.dec3(torch.cat([self.up3(dec4), skips[3]], dim=1))
+        dec2 = self.dec2(torch.cat([self.up2(dec3), skips[2]], dim=1))
+        dec1 = self.dec1(torch.cat([self.up1(dec2), skips[1]], dim=1))
+
+        out = self.out_conv(dec1)
+        if return_aux:
+            return out, {s: self.aux_heads[str(s)](skips[s]) for s in self.aux_stages}
+        return out
+
+
+class SupAttnMultiEncoderUNet(MultiEncoderUNet):
+    """監督つき Attention。存在マップを監督し、それでスキップ特徴を変調する。
+
+    なぜこの形か（docs/展望.md 5節「発展」が予告している案）
+      Attention U-Net は「効いていない」のではなく「冗長」だった。
+      注意係数は正解領域内0.705 / 外0.453 とはっきり絞り込めているのに
+      F値が変わらない。ゲートは既にある特徴を重み付けし直すだけで、
+      何を強調すべきかを教わっていないため。
+      一方、深層監督（DeepSupMultiEncoderUNet）は箇所F +0.003 とわずかに効いた。
+      そこで、ゲートの中身を損失で縛る。
+
+        skip ──→ aux_head ──→ 存在マップ ──→ 監督（FocalTversky）
+          │                        │
+          │                     sigmoid
+          │                        ↓
+          └────── × (1 + attn) ────────→ デコーダへ
+
+      既存手法では MPRNet (Zamir et al., CVPR 2021) の Supervised Attention
+      Module が同じ形。中間出力を監督し、それを attention に変えて特徴を変調する。
+
+    変調を x * (1 + attn) の残差型にした理由
+      x * attn にすると、学習初期に attn が約0.5 のとき信号が半減して
+      学習が不安定になる。残差型なら attention が役に立たなければ
+      モデルが無視できる。MPRNet も同じ形。
+
+    出力
+      return_aux=False（既定） マスクだけ。推論・評価のコードは変更不要
+      return_aux=True          (マスク, {段: 存在マップ}) 。学習ループで使う
+    """
+
+    SKIP_CH = {1: 64 * 2, 2: 128 * 2, 3: 256 * 2, 4: 512 * 2}
+
+    def __init__(self, out_channels=1, aux_stages=(2,), aux_channels=64):
+        super().__init__(out_channels=out_channels)
+        self.aux_stages = tuple(int(s) for s in aux_stages)
+        assert all(s in self.SKIP_CH for s in self.aux_stages),             f"aux_stages は {sorted(self.SKIP_CH)} から選ぶ: {self.aux_stages}"
+        self.aux_heads = nn.ModuleDict({
+            str(s): nn.Sequential(
+                nn.Conv2d(self.SKIP_CH[s], aux_channels, kernel_size=3, padding=1),
+                nn.BatchNorm2d(aux_channels),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(aux_channels, out_channels, kernel_size=1),
+            ) for s in self.aux_stages
+        })
+
+    def forward(self, dem, air, return_aux=False):
+        slope1 = self.slope_enc1(dem)
+        slope2 = self.slope_enc2(self.slope_pool1(slope1))
+        slope3 = self.slope_enc3(self.slope_pool2(slope2))
+        slope4 = self.slope_enc4(self.slope_pool3(slope3))
+        slope4 = self.dropout2(slope4)
+
+        curv1 = self.curv_enc1(air)
+        curv2 = self.curv_enc2(self.curv_pool1(curv1))
+        curv3 = self.curv_enc3(self.curv_pool2(curv2))
+        curv4 = self.curv_enc4(self.curv_pool3(curv3))
+        curv4 = self.dropout2(curv4)
+
+        skips = {1: torch.cat([slope1, curv1], dim=1),
+                 2: torch.cat([slope2, curv2], dim=1),
+                 3: torch.cat([slope3, curv3], dim=1),
+                 4: torch.cat([slope4, curv4], dim=1)}
+
+        # 監督つき Attention: 存在マップを作り、同じものでスキップを変調する
+        aux = {}
+        for st in self.aux_stages:
+            logits = self.aux_heads[str(st)](skips[st])
+            aux[st] = logits
+            skips[st] = skips[st] * (1.0 + torch.sigmoid(logits))
+
+        # ボトルネックは変調前の特徴から作る（デコーダ経路だけを変える）
+        fused = torch.cat([self.slope_pool4(slope4), self.curv_pool4(curv4)], dim=1)
+        bottleneck = self.dropout(self.bottleneck(fused))
+
+        dec4 = self.dec4(torch.cat([self.up4(bottleneck), skips[4]], dim=1))
+        dec3 = self.dec3(torch.cat([self.up3(dec4), skips[3]], dim=1))
+        dec2 = self.dec2(torch.cat([self.up2(dec3), skips[2]], dim=1))
+        dec1 = self.dec1(torch.cat([self.up1(dec2), skips[1]], dim=1))
+
+        out = self.out_conv(dec1)
+        return (out, aux) if return_aux else out
+
+
+def aux_target(mask, key):
+    """補助出力のキーから、その段の教師（ダウンサンプルした正解マスク）を作る。
+
+    キーは段の番号（2）でも、ブランチ付きの文字列（"2_slope"）でもよい。
+    段1は等倍、段2は1/2、段3は1/4。
+    """
+    stage = int(str(key).split("_")[0])
+    return mask if stage == 1 else downsample_mask(mask, 2 ** (stage - 1))
+
+
+class SupAttnPerBranchMultiEncoderUNet(MultiEncoderUNet):
+    """監督つき Attention を、ブランチ別に持つ版。
+
+    SupAttnMultiEncoderUNet との違いは、監督と変調を concat の前に行うこと。
+
+      結合後1ヘッド（SupAttn）      cat(slope, curv) -> 1ヘッド -> 両方に同じ変調
+      ブランチ別2ヘッド（この版）     slope -> ヘッドA -> slope を変調
+                                    curv  -> ヘッドB -> curv  を変調  -> cat
+
+    なぜ分けるか
+      1) 既存の AttentionMultiEncoderUNet はブランチ別にゲートを持っており
+         （ag4_slope / ag4_curv ...）、設計が揃う。
+      2) 注意係数の解析では、32px の段で地形量ブランチが正解領域内0.705 /
+         外0.453 とはっきり絞り込む一方、航空写真側は +0.068 でほぼ素通しだった。
+         2つのブランチは有効な注意パターンが違うので、同じ変調を強制するのは
+         無理がある。
+      3) 結合後に1ヘッドだと、ヘッドは易しい方（地形量）の特徴だけで損失を
+         満たせてしまい、航空写真ブランチには監督の圧力がほとんど掛からない。
+         ブランチ別なら、各ブランチが独立に存在マップを予測する必要がある。
+
+    教師は両ヘッドとも同じ存在マップなので、新しいラベルは要らない。
+    補助損失の重みはヘッド数で割るので、合計は aux_lambda のまま
+    （結合後1ヘッド版と総圧力を揃えて比べるため）。
+
+    出力
+      return_aux=False（既定） マスクだけ。推論・評価のコードは変更不要
+      return_aux=True          (マスク, {"<段>_slope": .., "<段>_curv": ..})
+    """
+
+    BRANCH_CH = {1: 64, 2: 128, 3: 256, 4: 512}
+
+    def __init__(self, out_channels=1, aux_stages=(2,), aux_channels=64):
+        super().__init__(out_channels=out_channels)
+        self.aux_stages = tuple(int(x) for x in aux_stages)
+        assert all(x in self.BRANCH_CH for x in self.aux_stages),             f"aux_stages は {sorted(self.BRANCH_CH)} から選ぶ: {self.aux_stages}"
+
+        def head(ch):
+            return nn.Sequential(
+                nn.Conv2d(ch, aux_channels, kernel_size=3, padding=1),
+                nn.BatchNorm2d(aux_channels),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(aux_channels, out_channels, kernel_size=1),
+            )
+
+        self.aux_heads = nn.ModuleDict({
+            f"{st}_{br}": head(self.BRANCH_CH[st])
+            for st in self.aux_stages for br in ("slope", "curv")
+        })
+
+    def forward(self, dem, air, return_aux=False):
+        slope1 = self.slope_enc1(dem)
+        slope2 = self.slope_enc2(self.slope_pool1(slope1))
+        slope3 = self.slope_enc3(self.slope_pool2(slope2))
+        slope4 = self.dropout2(self.slope_enc4(self.slope_pool3(slope3)))
+
+        curv1 = self.curv_enc1(air)
+        curv2 = self.curv_enc2(self.curv_pool1(curv1))
+        curv3 = self.curv_enc3(self.curv_pool2(curv2))
+        curv4 = self.dropout2(self.curv_enc4(self.curv_pool3(curv3)))
+
+        # ボトルネックは変調前の特徴から作る（デコーダ経路だけを変える）
+        fused = torch.cat([self.slope_pool4(slope4), self.curv_pool4(curv4)], dim=1)
+        bottleneck = self.dropout(self.bottleneck(fused))
+
+        sl = {1: slope1, 2: slope2, 3: slope3, 4: slope4}
+        cv = {1: curv1, 2: curv2, 3: curv3, 4: curv4}
+
+        # concat の前に、ブランチごとに監督して変調する
+        aux = {}
+        for st in self.aux_stages:
+            s_log = self.aux_heads[f"{st}_slope"](sl[st])
+            c_log = self.aux_heads[f"{st}_curv"](cv[st])
+            aux[f"{st}_slope"], aux[f"{st}_curv"] = s_log, c_log
+            sl[st] = sl[st] * (1.0 + torch.sigmoid(s_log))
+            cv[st] = cv[st] * (1.0 + torch.sigmoid(c_log))
+
+        skips = {k: torch.cat([sl[k], cv[k]], dim=1) for k in (1, 2, 3, 4)}
+
+        dec4 = self.dec4(torch.cat([self.up4(bottleneck), skips[4]], dim=1))
+        dec3 = self.dec3(torch.cat([self.up3(dec4), skips[3]], dim=1))
+        dec2 = self.dec2(torch.cat([self.up2(dec3), skips[2]], dim=1))
+        dec1 = self.dec1(torch.cat([self.up1(dec2), skips[1]], dim=1))
+
+        out = self.out_conv(dec1)
+        return (out, aux) if return_aux else out
+
+
+class _ASPP(nn.Module):
+    """Atrous Spatial Pyramid Pooling。解像度を保ったまま複数の文脈を取る。
+
+    64x64 の段（1画素 = 8.96 m）に置いたときの、各枝が見る範囲。
+
+      枝            受容野      実寸
+      1x1              1px      9 m
+      3x3 d=2          5px     45 m
+      3x3 d=4          9px     81 m   ← 箇所の典型サイズ（中央値328px ≒ 81m四方）
+      3x3 d=8         17px    152 m
+      大域プーリング      全体    573 m
+
+    既存の aux_head は Conv3x3 のみで受容野 26.9 m しかなく、
+    斜面全体と保全対象の有無で決まる指定を判定するには足りなかった
+    （docs/次の手_文脈と不均衡.md 1節）。
+    """
+
+    def __init__(self, in_ch, out_ch=None, branch_ch=64, dilations=(2, 4, 8)):
+        super().__init__()
+        out_ch = out_ch or in_ch
+
+        def cbr(k, d):
+            return nn.Sequential(
+                nn.Conv2d(in_ch, branch_ch, kernel_size=k,
+                          padding=(0 if k == 1 else d), dilation=d, bias=False),
+                nn.BatchNorm2d(branch_ch), nn.ReLU(inplace=True))
+
+        self.branches = nn.ModuleList([cbr(1, 1)] + [cbr(3, d) for d in dilations])
+        self.pool = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(in_ch, branch_ch, kernel_size=1, bias=False),
+            nn.BatchNorm2d(branch_ch), nn.ReLU(inplace=True))
+        self.project = nn.Sequential(
+            nn.Conv2d(branch_ch * (len(self.branches) + 1), out_ch, kernel_size=1, bias=False),
+            nn.BatchNorm2d(out_ch), nn.ReLU(inplace=True))
+
+    def forward(self, x):
+        hw = x.shape[-2:]
+        feats = [b(x) for b in self.branches]
+        feats.append(F.interpolate(self.pool(x), size=hw, mode="bilinear", align_corners=False))
+        return self.project(torch.cat(feats, dim=1))
+
+
+class ASPPDeepSupMultiEncoderUNet(MultiEncoderUNet):
+    """スキップ接続に ASPP で文脈を足し、そこを深層監督する。
+
+    docs/次の手_文脈と不均衡.md の案A（ASPP）と案C（補助ヘッドを厚くする）を
+    1本で満たす構成。ASPP の出力に補助ヘッドを載せるので、
+    補助ヘッドの Precision が上がれば「文脈不足が原因」という診断が確定し、
+    同時にデコーダへ渡るスキップも文脈つきになる。
+
+        skip2 (64x64, 256ch)
+           └─ + ASPP(skip2) ──┬─→ aux_head ──→ 存在マップ（監督）
+                              └─→ デコーダへ
+
+    残差（skip + ASPP(skip)）にしてあるので、ASPP が役に立たなければ
+    モデルは元のスキップをそのまま使える。
+
+    なぜ「ボトルネックではなく 64x64 に置くのか」
+      TransUNet(94M) は大域文脈をボトルネック(8x8)に入れたが Final(43.6M)より
+      有意に悪かった（-0.0069, p=0.002）。8x8 は 71.7 m/画素で、300px 以下の
+      箇所はサブピクセルになっており、解像度を失ったあとに文脈を足しても遅い。
+      ASPP は解像度を保ったまま文脈を取るので別物。
+
+    出力
+      return_aux=False（既定） マスクだけ。推論・評価のコードは変更不要
+      return_aux=True          (マスク, {段: 存在マップ})
+    """
+
+    SKIP_CH = {1: 64 * 2, 2: 128 * 2, 3: 256 * 2, 4: 512 * 2}
+
+    def __init__(self, out_channels=1, aux_stages=(2,), aux_channels=64,
+                 aspp_branch_ch=64, dilations=(2, 4, 8)):
+        super().__init__(out_channels=out_channels)
+        self.aux_stages = tuple(int(x) for x in aux_stages)
+        assert all(x in self.SKIP_CH for x in self.aux_stages),             f"aux_stages は {sorted(self.SKIP_CH)} から選ぶ: {self.aux_stages}"
+        self.aspp = nn.ModuleDict({
+            str(st): _ASPP(self.SKIP_CH[st], branch_ch=aspp_branch_ch, dilations=dilations)
+            for st in self.aux_stages})
+        self.aux_heads = nn.ModuleDict({
+            str(st): nn.Sequential(
+                nn.Conv2d(self.SKIP_CH[st], aux_channels, kernel_size=3, padding=1),
+                nn.BatchNorm2d(aux_channels), nn.ReLU(inplace=True),
+                nn.Conv2d(aux_channels, out_channels, kernel_size=1),
+            ) for st in self.aux_stages})
+
+    def forward(self, dem, air, return_aux=False):
+        slope1 = self.slope_enc1(dem)
+        slope2 = self.slope_enc2(self.slope_pool1(slope1))
+        slope3 = self.slope_enc3(self.slope_pool2(slope2))
+        slope4 = self.dropout2(self.slope_enc4(self.slope_pool3(slope3)))
+
+        curv1 = self.curv_enc1(air)
+        curv2 = self.curv_enc2(self.curv_pool1(curv1))
+        curv3 = self.curv_enc3(self.curv_pool2(curv2))
+        curv4 = self.dropout2(self.curv_enc4(self.curv_pool3(curv3)))
+
+        skips = {1: torch.cat([slope1, curv1], dim=1),
+                 2: torch.cat([slope2, curv2], dim=1),
+                 3: torch.cat([slope3, curv3], dim=1),
+                 4: torch.cat([slope4, curv4], dim=1)}
+
+        # ボトルネックは文脈を足す前の特徴から作る（デコーダ経路だけを変える）
+        fused = torch.cat([self.slope_pool4(slope4), self.curv_pool4(curv4)], dim=1)
+        bottleneck = self.dropout(self.bottleneck(fused))
+
+        aux = {}
+        for st in self.aux_stages:
+            skips[st] = skips[st] + self.aspp[str(st)](skips[st])   # 残差で文脈を足す
+            aux[st] = self.aux_heads[str(st)](skips[st])
+
+        dec4 = self.dec4(torch.cat([self.up4(bottleneck), skips[4]], dim=1))
+        dec3 = self.dec3(torch.cat([self.up3(dec4), skips[3]], dim=1))
+        dec2 = self.dec2(torch.cat([self.up2(dec3), skips[2]], dim=1))
+        dec1 = self.dec1(torch.cat([self.up1(dec2), skips[1]], dim=1))
+
+        out = self.out_conv(dec1)
+        return (out, aux) if return_aux else out
+
+
+class ASPPStride8MultiEncoderUNet(ASPPDeepSupMultiEncoderUNet):
+    """ASPP に加えて、ボトルネックの解像度を上げた版（出力ストライド 16 → 8）。
+
+    docs/次の手_文脈と不均衡.md の案A（ASPP）と案B（出力ストライドを下げる）の併用。
+
+    なぜ案Bを足すのか
+      ASPP 単体の実験で、補助ヘッド単体の F は 0.5754 → 0.6944 と大きく上がったのに
+      本体の出力は良くならなかった。**デコーダはスキップ経路をあまり使っておらず、
+      ボトルネック経路を信用している**ことになる。
+      一方 展望.md 2節(c) は「見逃し率はボトルネックでの画素数に対応する」と
+      示しており、そのボトルネックは 8x8 = 71.7 m/画素で 300px 以下の箇所が
+      サブピクセルになっている。
+      案A がデコーダの使わない経路を改善していたのに対し、案B は実際に出力を
+      駆動している経路の解像度を上げる。
+
+    何を変えたか
+      pool4 を使わず、ボトルネックを 16x16（35.9 m/画素）で計算する。
+      300px の箇所が 1.08 → 2.2 画素になる。
+      そのままでは受容野が半分になるので、ボトルネックの畳み込みに dilation を
+      入れて補う（8x8 で 5px = 358 m → 16x16 で dilation 2 の 9px = 323 m）。
+      up4（ConvTranspose 8→16）は不要になるので、チャネルを半分にする 1x1 に置き換える。
+      デコーダ以降の形は変わらない。
+
+    メモリ
+      ボトルネックの活性が4倍になる。バッチ32で収まらない場合は
+      config の train.batch_size を下げる（他条件と学習条件がずれる点に注意）。
+    """
+
+    def __init__(self, out_channels=1, aux_stages=(2,), aux_channels=64,
+                 aspp_branch_ch=64, dilations=(2, 4, 8), bottleneck_dilation=2):
+        super().__init__(out_channels=out_channels, aux_stages=aux_stages,
+                         aux_channels=aux_channels, aspp_branch_ch=aspp_branch_ch,
+                         dilations=dilations)
+        d = bottleneck_dilation
+        # ボトルネックを 16x16 で計算する。dilation で受容野を補う
+        self.bottleneck = nn.Sequential(
+            nn.Conv2d(1024, 1024, kernel_size=3, padding=d, dilation=d),
+            nn.BatchNorm2d(1024), nn.ReLU(inplace=True),
+            nn.Conv2d(1024, 1024, kernel_size=3, padding=d, dilation=d),
+            nn.BatchNorm2d(1024), nn.ReLU(inplace=True),
+        )
+        # up4 は不要（既に 16x16）。チャネルだけ 1024 -> 512 に落とす
+        self.up4 = nn.Sequential(
+            nn.Conv2d(1024, 512, kernel_size=1, bias=False),
+            nn.BatchNorm2d(512), nn.ReLU(inplace=True),
+        )
+
+    def forward(self, dem, air, return_aux=False):
+        slope1 = self.slope_enc1(dem)
+        slope2 = self.slope_enc2(self.slope_pool1(slope1))
+        slope3 = self.slope_enc3(self.slope_pool2(slope2))
+        slope4 = self.dropout2(self.slope_enc4(self.slope_pool3(slope3)))
+
+        curv1 = self.curv_enc1(air)
+        curv2 = self.curv_enc2(self.curv_pool1(curv1))
+        curv3 = self.curv_enc3(self.curv_pool2(curv2))
+        curv4 = self.dropout2(self.curv_enc4(self.curv_pool3(curv3)))
+
+        skips = {1: torch.cat([slope1, curv1], dim=1),
+                 2: torch.cat([slope2, curv2], dim=1),
+                 3: torch.cat([slope3, curv3], dim=1),
+                 4: torch.cat([slope4, curv4], dim=1)}
+
+        # pool4 を通さない。ボトルネックは 16x16 のまま
+        bottleneck = self.dropout(self.bottleneck(skips[4]))
+
+        aux = {}
+        for st in self.aux_stages:
+            skips[st] = skips[st] + self.aspp[str(st)](skips[st])
+            aux[st] = self.aux_heads[str(st)](skips[st])
+
+        dec4 = self.dec4(torch.cat([self.up4(bottleneck), skips[4]], dim=1))
+        dec3 = self.dec3(torch.cat([self.up3(dec4), skips[3]], dim=1))
+        dec2 = self.dec2(torch.cat([self.up2(dec3), skips[2]], dim=1))
+        dec1 = self.dec1(torch.cat([self.up1(dec2), skips[1]], dim=1))
+
+        out = self.out_conv(dec1)
+        return (out, aux) if return_aux else out
+
+
+class ASPPStride4MultiEncoderUNet(ASPPDeepSupMultiEncoderUNet):
+    """ASPP + 出力ストライド4（ボトルネック 32x32 = 17.9 m/画素）。
+
+    ASPPStride8 が構造変更で唯一 bg10 を超えた（広島 面積F +0.0118 / 箇所F +0.0186）
+    ことを受けて、同じ軸（ボトルネックの解像度）をもう一段押したもの。
+
+      版              ボトルネック   m/画素   300px の箇所
+      元              8x8           71.7     1.08 px
+      ストライド8       16x16         35.8     2.17 px
+      ストライド4       32x32         17.9     4.34 px
+
+    何を変えたか
+      pool3 も pool4 も通さない。enc4 と bottleneck は 32x32 で計算する。
+      受容野が落ちるぶんを dilation で補う。
+        enc4       dilation 2（pool3 を抜いたぶん）
+        bottleneck dilation 4（pool3+pool4 を抜いたぶん）
+                   8x8 で 5px=358m → 32x32 で 17px=304m
+      up4 / up3 は拡大が不要になるので 1x1 のチャネル変換に置き換える。
+      skip3 と skip4 がどちらも 32x32 になるが、デコーダの形は変わらない。
+
+    メモリ
+      ストライド8 の約4倍。バッチ32 で収まらない場合は train.batch_size を
+      下げる（他条件と学習条件がずれる点に注意）。
+    """
+
+    def __init__(self, out_channels=1, aux_stages=(2,), aux_channels=64,
+                 aspp_branch_ch=64, dilations=(2, 4, 8),
+                 enc4_dilation=2, bottleneck_dilation=4):
+        super().__init__(out_channels=out_channels, aux_stages=aux_stages,
+                         aux_channels=aux_channels, aspp_branch_ch=aspp_branch_ch,
+                         dilations=dilations)
+
+        def block(in_ch, out_ch, d):
+            return nn.Sequential(
+                nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=d, dilation=d),
+                nn.BatchNorm2d(out_ch), nn.ReLU(inplace=True),
+                nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=d, dilation=d),
+                nn.BatchNorm2d(out_ch), nn.ReLU(inplace=True))
+
+        e = enc4_dilation
+        self.slope_enc4 = block(256, 512, e)
+        self.curv_enc4 = block(256, 512, e)
+        self.bottleneck = block(1024, 1024, bottleneck_dilation)
+        # 拡大は不要。チャネルだけ合わせる
+        self.up4 = nn.Sequential(nn.Conv2d(1024, 512, kernel_size=1, bias=False),
+                                 nn.BatchNorm2d(512), nn.ReLU(inplace=True))
+        self.up3 = nn.Sequential(nn.Conv2d(512, 256, kernel_size=1, bias=False),
+                                 nn.BatchNorm2d(256), nn.ReLU(inplace=True))
+
+    def forward(self, dem, air, return_aux=False):
+        slope1 = self.slope_enc1(dem)
+        slope2 = self.slope_enc2(self.slope_pool1(slope1))
+        slope3 = self.slope_enc3(self.slope_pool2(slope2))
+        slope4 = self.dropout2(self.slope_enc4(slope3))      # pool3 を通さない
+
+        curv1 = self.curv_enc1(air)
+        curv2 = self.curv_enc2(self.curv_pool1(curv1))
+        curv3 = self.curv_enc3(self.curv_pool2(curv2))
+        curv4 = self.dropout2(self.curv_enc4(curv3))
+
+        skips = {1: torch.cat([slope1, curv1], dim=1),
+                 2: torch.cat([slope2, curv2], dim=1),
+                 3: torch.cat([slope3, curv3], dim=1),
+                 4: torch.cat([slope4, curv4], dim=1)}
+
+        bottleneck = self.dropout(self.bottleneck(skips[4]))   # pool4 も通さない
+
+        aux = {}
+        for st in self.aux_stages:
+            skips[st] = skips[st] + self.aspp[str(st)](skips[st])
+            aux[st] = self.aux_heads[str(st)](skips[st])
+
+        dec4 = self.dec4(torch.cat([self.up4(bottleneck), skips[4]], dim=1))
+        dec3 = self.dec3(torch.cat([self.up3(dec4), skips[3]], dim=1))
+        dec2 = self.dec2(torch.cat([self.up2(dec3), skips[2]], dim=1))
+        dec1 = self.dec1(torch.cat([self.up1(dec2), skips[1]], dim=1))
+
+        out = self.out_conv(dec1)
+        return (out, aux) if return_aux else out
+
+
+class FullSkipMultiEncoderUNet(MultiEncoderUNet):
+    """全スケールのスキップをデコーダ各段に直接渡す（UNet3+ 風）。
+
+    なぜこの方向か（docs/層ごとの効き方.md）
+      bg10系7条件を箇所F で並べると、上位4つは「渡し方を変えた」もの
+      （監督・変調）で、下位2つは「中身を良くした」もの（ASPP・ストライド8）だった。
+
+        SupAttnPB  0.6411  渡し方（監督+変調・ブランチ別）
+        SupAttn    0.6340  渡し方（監督+変調）
+        DeepSupAll 0.6319  渡し方（監督）
+        DeepSup    0.6294  渡し方（監督）
+        Stride8    0.6250  中身
+        ASPP       0.6171  中身
+        bg10       0.6136  （基準）
+
+      中身（スキップの質・ボトルネックの解像度）は個別に改善しても出力に
+      届かなかった（ASPP で補助ヘッドが +0.119 でも本体は +0.009）。
+      一方まだ触っていないのが**統合のしかた**そのもので、現状は
+      cat してから conv するだけ。ここを変える。
+
+    何を変えたか
+      各デコーダ段が、ボトルネックと全スキップを直接受け取る。
+
+        現在                              この版
+        dec4 ← up4(bn) + skip4            dec4 ← bn↑ + skip4 + skip3↓ + skip2↓ + skip1↓
+        dec3 ← up3(dec4) + skip3          dec3 ← bn↑ + dec4↑ + skip3 + skip2↓ + skip1↓
+        dec2 ← up2(dec3) + skip2          dec2 ← bn↑ + dec4↑ + dec3↑ + skip2 + skip1↓
+        dec1 ← up1(dec2) + skip1          dec1 ← bn↑ + dec4↑ + dec3↑ + dec2↑ + skip1
+
+      最終段（dec1, 128x128）がボトルネックの判断を3段越しではなく直接受け取る。
+      各経路を 64ch に揃えて5本 concat するので、デコーダは一律 320ch。
+
+      コスト（RTX 16GB、バッチ32、学習と同じ forward+backward で実測）
+        パラメータ  43.6M → 52.7〜53.4M（横方向の 3x3 が20本増えるため重くなる）
+        メモリ      約6GB → 9.3〜10.6GB
+        1ステップ   約4倍（0.1s → 0.38〜0.43s）
+      デコーダ段が一律320chで軽く見えるが、全段が全スケールを受けるぶん
+      横方向の畳み込みが増えて差し引きで重くなる。
+
+    オプション（段階的に試すため既定は全部オフ）
+      aux_stages      ブランチ別の深層監督＋変調を入れる段（SupAttnPB と同じ機構）
+      use_aspp        その段にブランチ別 ASPP を入れる
+
+    出力
+      return_aux=False（既定） マスクだけ。推論・評価のコードは変更不要
+      return_aux=True          (マスク, {"<段>_slope": .., "<段>_curv": ..})
+    """
+
+    BRANCH_CH = {1: 64, 2: 128, 3: 256, 4: 512}
+    SCALE = {1: 128, 2: 64, 3: 32, 4: 16, 0: 8}      # 0 はボトルネック
+    CAT_CH = 64
+
+    def __init__(self, out_channels=1, aux_stages=(), aux_channels=64,
+                 use_aspp=False, aspp_branch_ch=64, dilations=(2, 4, 8)):
+        super().__init__(out_channels=out_channels)
+        self.aux_stages = tuple(int(x) for x in aux_stages)
+        self.use_aspp = bool(use_aspp)
+
+        def head(ch):
+            return nn.Sequential(
+                nn.Conv2d(ch, aux_channels, kernel_size=3, padding=1),
+                nn.BatchNorm2d(aux_channels), nn.ReLU(inplace=True),
+                nn.Conv2d(aux_channels, out_channels, kernel_size=1))
+
+        # ブランチ別の監督ヘッド（SupAttnPB と同じ）
+        self.aux_heads = nn.ModuleDict({
+            f"{st}_{br}": head(self.BRANCH_CH[st])
+            for st in self.aux_stages for br in ("slope", "curv")})
+        # ブランチ別 ASPP
+        self.aspp = nn.ModuleDict({
+            f"{st}_{br}": _ASPP(self.BRANCH_CH[st], branch_ch=aspp_branch_ch,
+                                dilations=dilations)
+            for st in (self.aux_stages if use_aspp else ())
+            for br in ("slope", "curv")})
+
+        # 各経路を CAT_CH に揃える 1x1（入力チャネルは源によって違う）
+        src_ch = {0: 1024, 1: 128, 2: 256, 3: 512, 4: 1024}      # スキップ側
+        dec_ch = self.CAT_CH * 5                                  # デコーダ段の出力
+        self.lat = nn.ModuleDict()
+        for d in (4, 3, 2, 1):
+            for src in (0, 1, 2, 3, 4):
+                if src != 0 and src > d:
+                    continue                 # 自分より深い段のスキップは使わない
+                                             # （深い側はデコーダ出力として入ってくる）
+                ch = src_ch[src] if (src == 0 or src >= d) else src_ch[src]
+                self.lat[f"d{d}_s{src}"] = nn.Sequential(
+                    nn.Conv2d(ch, self.CAT_CH, kernel_size=3, padding=1, bias=False),
+                    nn.BatchNorm2d(self.CAT_CH), nn.ReLU(inplace=True))
+            for deeper in (4, 3, 2):
+                if deeper <= d:
+                    continue
+                self.lat[f"d{d}_dec{deeper}"] = nn.Sequential(
+                    nn.Conv2d(dec_ch, self.CAT_CH, kernel_size=3, padding=1, bias=False),
+                    nn.BatchNorm2d(self.CAT_CH), nn.ReLU(inplace=True))
+
+        self.dec = nn.ModuleDict({
+            f"d{d}": nn.Sequential(
+                nn.Conv2d(dec_ch, dec_ch, kernel_size=3, padding=1, bias=False),
+                nn.BatchNorm2d(dec_ch), nn.ReLU(inplace=True))
+            for d in (4, 3, 2, 1)})
+        self.out_conv = nn.Conv2d(dec_ch, out_channels, kernel_size=1)
+
+    @classmethod
+    def _lateral(cls, conv, x, size):
+        """チャネルを CAT_CH に落としてから目標解像度に合わせる。
+
+        順序が効く。拡大する経路（深い段 → 浅い段）でリサイズを先にすると、
+        1024ch を 128x128 に広げてから畳み込むことになり、計算もメモリも
+        桁違いに重くなる。縮小する経路は先にリサイズするほうが安い。
+        """
+        if x.shape[-1] < size:
+            return cls._resize(conv(x), size)        # 拡大: 畳み込み → 拡大
+        return conv(cls._resize(x, size))            # 縮小: 縮小 → 畳み込み
+
+    @staticmethod
+    def _resize(x, size):
+        if x.shape[-1] == size:
+            return x
+        if x.shape[-1] > size:
+            return F.adaptive_max_pool2d(x, size)
+        return F.interpolate(x, size=(size, size), mode="bilinear", align_corners=False)
+
+    def forward(self, dem, air, return_aux=False):
+        slope1 = self.slope_enc1(dem)
+        slope2 = self.slope_enc2(self.slope_pool1(slope1))
+        slope3 = self.slope_enc3(self.slope_pool2(slope2))
+        slope4 = self.dropout2(self.slope_enc4(self.slope_pool3(slope3)))
+
+        curv1 = self.curv_enc1(air)
+        curv2 = self.curv_enc2(self.curv_pool1(curv1))
+        curv3 = self.curv_enc3(self.curv_pool2(curv2))
+        curv4 = self.dropout2(self.curv_enc4(self.curv_pool3(curv3)))
+
+        sl = {1: slope1, 2: slope2, 3: slope3, 4: slope4}
+        cv = {1: curv1, 2: curv2, 3: curv3, 4: curv4}
+
+        bottleneck = self.dropout(self.bottleneck(
+            torch.cat([self.slope_pool4(slope4), self.curv_pool4(curv4)], dim=1)))
+
+        # ブランチ別に ASPP → 監督 → 変調（指定した段だけ）
+        aux = {}
+        for st in self.aux_stages:
+            for br, store in (("slope", sl), ("curv", cv)):
+                f = store[st]
+                if self.use_aspp:
+                    f = f + self.aspp[f"{st}_{br}"](f)
+                logits = self.aux_heads[f"{st}_{br}"](f)
+                aux[f"{st}_{br}"] = logits
+                store[st] = f * (1.0 + torch.sigmoid(logits))
+
+        skips = {0: bottleneck}
+        for k in (1, 2, 3, 4):
+            skips[k] = torch.cat([sl[k], cv[k]], dim=1)
+
+        # 全スケール結合。深い段から順に作る
+        outs = {}
+        for d in (4, 3, 2, 1):
+            size = self.SCALE[d]
+            parts = []
+            for src in (0, 1, 2, 3, 4):
+                if src != 0 and src > d:
+                    continue
+                parts.append(self._lateral(self.lat[f"d{d}_s{src}"], skips[src], size))
+            for deeper in (4, 3, 2):
+                if deeper <= d:
+                    continue
+                parts.append(self._lateral(self.lat[f"d{d}_dec{deeper}"],
+                                           outs[deeper], size))
+            outs[d] = self.dec[f"d{d}"](torch.cat(parts, dim=1))
+
+        out = self.out_conv(outs[1])
+        return (out, aux) if return_aux else out
+
+
 MODEL_CLASSES = {
     "UNet": UNet,
     "MultiEncoderUNet": MultiEncoderUNet,
@@ -535,13 +1322,30 @@ MODEL_CLASSES = {
     "MiddleFusionUNet": MiddleFusionUNet,
     "AttentionMultiEncoderUNet": AttentionMultiEncoderUNet,
     "TransUNetDual": TransUNetDual,
+    "DeepSupMultiEncoderUNet": DeepSupMultiEncoderUNet,
+    "AllSkipDeepSupMultiEncoderUNet": AllSkipDeepSupMultiEncoderUNet,
+    "SupAttnMultiEncoderUNet": SupAttnMultiEncoderUNet,
+    "SupAttnPerBranchMultiEncoderUNet": SupAttnPerBranchMultiEncoderUNet,
+    "ASPPDeepSupMultiEncoderUNet": ASPPDeepSupMultiEncoderUNet,
+    "ASPPStride8MultiEncoderUNet": ASPPStride8MultiEncoderUNet,
+    "ASPPStride4MultiEncoderUNet": ASPPStride4MultiEncoderUNet,
+    "FullSkipMultiEncoderUNet": FullSkipMultiEncoderUNet,
 }
 
 
-def build_model(class_name):
+def build_model(class_name, **kwargs):
+    """モデルを作る。kwargs はそのクラスの __init__ が受け取るものだけ渡す。
+
+    条件ごとに aux_stages / use_aspp などが違うので、ノートブックから
+    build_model(arch, aux_stages=..., use_aspp=...) と渡せるようにしてある。
+    受け取らないクラスに渡しても無視する（既存条件のコードを変えずに済む）。
+    """
+    import inspect
     if class_name not in MODEL_CLASSES:
         raise KeyError(f"未知のモデルクラス: {class_name}")
-    return MODEL_CLASSES[class_name]()
+    cls = MODEL_CLASSES[class_name]
+    ok = set(inspect.signature(cls.__init__).parameters)
+    return cls(**{k: v for k, v in kwargs.items() if k in ok})
 
 
 def load_weights(model, checkpoint_path, device="cpu"):
@@ -566,7 +1370,7 @@ def forward_arity(class_name: str) -> int:
     import inspect
     cls = MODEL_CLASSES[class_name]
     return len([p for p in inspect.signature(cls.forward).parameters
-                if p not in ("self", "return_attention")])
+                if p not in ("self", "return_attention", "return_aux")])
 
 
 if __name__ == "__main__":
