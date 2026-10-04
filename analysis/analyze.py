@@ -91,11 +91,19 @@ def load_all(region, with_features=True):
 
 # ------------------------------------------------------------------ 集計
 def micro(df, suf=""):
-    tp, fp, fn = df["tp" + suf].sum(), df["fp" + suf].sum(), df["fn" + suf].sum()
+    """画素単位の Recall / Precision / F値 と、その元になった画素数。
+
+    以前は割合だけ返して tp/fp/fn を捨てていた。それだと results/metrics.csv に
+    絶対数が残らず、あとから陽性画素率などを再計算できなくなるので、
+    カウントも返すようにした。
+    """
+    tp = int(df["tp" + suf].sum())
+    fp = int(df["fp" + suf].sum())
+    fn = int(df["fn" + suf].sum())
     rec = tp / (tp + fn) if tp + fn else np.nan
     pre = tp / (tp + fp) if tp + fp else np.nan
     f1 = 2 * rec * pre / (rec + pre) if rec and pre else np.nan
-    return rec, pre, f1
+    return rec, pre, f1, tp, fp, fn
 
 
 def summary_by_condition(df, region):
@@ -106,10 +114,13 @@ def summary_by_condition(df, region):
         row = {"region": region, "condition": cond, "label": label,
                "n_tiles": len(g), "n_tiles_with_gt": len(gt)}
         for suf, tag in (("", "通常"), ("_c", "境界")):
-            r, p, f = micro(g, suf)
+            r, p, f, tp, fp, fn = micro(g, suf)
             row[f"{tag}_recall"] = round(r, 4)
             row[f"{tag}_precision"] = round(p, 4)
             row[f"{tag}_f1"] = round(f, 4)
+            row[f"{tag}_tp"] = tp
+            row[f"{tag}_fp"] = fp
+            row[f"{tag}_fn"] = fn
             row[f"{tag}_f1_macro"] = round(gt["f1" + suf].mean(), 4)
             row[f"{tag}_f1_median"] = round(gt["f1" + suf].median(), 4)
             row[f"{tag}_iou_macro"] = round(gt["iou" + suf].mean(), 4)
@@ -158,11 +169,14 @@ def region_matrix(frames):
             if g.empty:
                 continue
             row["label"] = g["label"].iloc[0]
-            r, p, f = micro(g)
+            r, p, f, tp, fp, fn = micro(g)
             row[f"{name}_n"] = len(g)
             row[f"{name}_recall"] = round(r, 4)
             row[f"{name}_precision"] = round(p, 4)
             row[f"{name}_f1"] = round(f, 4)
+            row[f"{name}_tp"] = tp
+            row[f"{name}_fp"] = fp
+            row[f"{name}_fn"] = fn
         rows.append(row)
     out = pd.DataFrame(rows)
     cols = ["condition", "label"] + [c for c in out.columns if c not in ("condition", "label")]
@@ -174,8 +188,8 @@ def matched_subset_summary(df, region):
     rows = []
     for (cond, label), g in df.groupby(["condition", "label"], sort=False):
         gt = g[g["has_gt"]]
-        r_all, p_all, f_all = micro(g)
-        r_gt, p_gt, f_gt = micro(gt)
+        r_all, p_all, f_all, tp_all, fp_all, fn_all = micro(g)
+        r_gt, p_gt, f_gt, tp_gt, fp_gt, fn_gt = micro(gt)
         rows.append({
             "region": region, "condition": cond, "label": label,
             "全タイル_n": len(g), "全タイル_recall": round(r_all, 4),

@@ -18,7 +18,7 @@ inputs:
 augment: false
 bg_ratio: 0.0
 status: excluded
-label: ''
+label: Final SAM+APM（重複・対象外）
 note: FinalFusion_SAM_APM と同内容のため解析対象外
 dataset:
   Hiroshima: hiroshima_sam_apm.pkl
