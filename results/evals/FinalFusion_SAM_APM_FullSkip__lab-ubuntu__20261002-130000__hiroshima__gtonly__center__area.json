@@ -1,0 +1,18 @@
+{
+ "condition": "FinalFusion_SAM_APM_FullSkip",
+ "eval_id": "FinalFusion_SAM_APM_FullSkip__lab-ubuntu__20261002-130000__hiroshima__gtonly__center__area",
+ "evaluated_at": "2026-10-04T17:45:00",
+ "f1": 0.6875,
+ "machine": "lab-ubuntu",
+ "metric_kind": "面積",
+ "n_tiles": 2964.0,
+ "note": "tileanalysis による再推論。ノートブック出力と F値 0.0001 以内で一致",
+ "precision": 0.6364,
+ "recall": 0.7475,
+ "region": "hiroshima",
+ "run_id": "FinalFusion_SAM_APM_FullSkip__lab-ubuntu__20261002-130000",
+ "scope": "境界",
+ "setting": "",
+ "tileset": "警戒のみ",
+ "weights_sha256": null
+}
