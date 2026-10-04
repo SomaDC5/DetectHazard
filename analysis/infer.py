@@ -15,7 +15,7 @@ import pandas as pd
 import torch
 
 from . import config
-from dc5lib.models import build_model, load_weights
+from dc5lib.models import build_model_for, load_weights
 
 
 def pick_device(name=None):
@@ -46,7 +46,7 @@ TILE_COLUMNS = [
 @torch.no_grad()
 def run_condition(cond, tiles, device, batch_size=32, progress_every=20):
     """1条件ぶんの推論。タイルごとの混同行列を DataFrame で返す。"""
-    model = build_model(cond.model_class).to(device)
+    model = build_model_for(cond).to(device)
     meta = load_weights(model, cond.weights, device=device)
     model.eval()
 

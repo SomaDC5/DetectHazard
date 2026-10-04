@@ -27,7 +27,7 @@ from sklearn.model_selection import train_test_split
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dc5lib import results as dc5results                      # noqa: E402
 from dc5lib.instance_eval import PRIMARY, InstanceEvaluator    # noqa: E402
-from dc5lib.models import build_model, load_weights            # noqa: E402
+from dc5lib.models import build_model_for, load_weights            # noqa: E402
 from dc5lib.paths import dataset_path                          # noqa: E402
 from dc5lib.registry import get                                # noqa: E402
 from analysis.data import load_pkl                             # noqa: E402
@@ -102,7 +102,7 @@ def prep_mask(ds, k):
 
 @torch.no_grad()
 def evaluate(cond, region, device, verbose=True):
-    model = build_model(cond.arch).to(device)
+    model = build_model_for(cond).to(device)
     meta = load_weights(model, cond.weights, device=device)
     model.eval()
 

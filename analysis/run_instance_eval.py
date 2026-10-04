@@ -34,7 +34,7 @@ import torch  # noqa: E402
 
 from analysis import config, infer, instances  # noqa: E402
 from analysis.data import build_tileset  # noqa: E402
-from dc5lib.models import build_model, load_weights  # noqa: E402
+from dc5lib.models import build_model_for, load_weights  # noqa: E402
 
 INSTANCES_DIR = os.path.join(config.OUTPUT_DIR, "instances")
 
@@ -53,7 +53,7 @@ SETTINGS = {
 @torch.no_grad()
 def run_condition(cond, tiles, device, batch_size=32, connectivity=8, min_size=10,
                   prob_thr=None, save_instances=False):
-    model = build_model(cond.model_class).to(device)
+    model = build_model_for(cond).to(device)
     load_weights(model, cond.weights, device=device)
     model.eval()
     thr = config.THRESHOLD if prob_thr is None else prob_thr

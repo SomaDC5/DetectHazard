@@ -1348,6 +1348,28 @@ def build_model(class_name, **kwargs):
     return cls(**{k: v for k, v in kwargs.items() if k in ok})
 
 
+def build_model_for(cond):
+    """条件から、学習時とまったく同じ構造のモデルを作る。
+
+    FullSkipMultiEncoderUNet のように、同じクラスを config のオプションで
+    切り替えるモデルがある。推論側でオプションを渡し忘れると別の構造になり、
+    load_state_dict(strict=True) が落ちる。
+
+    判定は学習ノートブック（セル16）と同じにしてある。
+    **λ=0 なら監督なし**なので aux_stages は空にする。aux_stages の既定は
+    (1,2,3) なので、ここを分けないと監督なしの条件に補助ヘッドが生えてしまう。
+
+        cond は条件名でも Condition でもよい。
+    """
+    from .losses import aux_lambda, aux_stages, use_aspp
+    arch = cond if isinstance(cond, str) else cond.arch
+    if isinstance(cond, str):
+        from .registry import get
+        arch = get(cond).arch
+    stages = aux_stages(cond) if aux_lambda(cond) > 0 else ()
+    return build_model(arch, aux_stages=stages, use_aspp=use_aspp(cond))
+
+
 def load_weights(model, checkpoint_path, device="cpu"):
     """best_model.pth を読み込む。
 
