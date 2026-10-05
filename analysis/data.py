@@ -132,7 +132,8 @@ class TileSet:
     """評価に使うタイルの集合。
 
     terrain : float32 [N, 1, 128, 128]  地形量（pklの値そのまま）
-    air     : uint8   [N, 3, 128, 128]  航空写真（なければ None）
+    air     : uint8   [N, 3, P, P]      航空写真（なければ None）。P は pkl 次第で
+                                        128 のことも 256 のこともある
     mask    : uint8   [N, 1, 128, 128]  前処理済みの正解
     no      : list    タイル番号
     geo     : list    GeoInfo（左上経度・画素サイズなど）
@@ -199,8 +200,15 @@ def build_tileset(pkl_path, region, need_airphoto, bg_ratio=0.0, verbose=True):
     n = len(sel)
     terrain = np.empty((n, 1, config.TILE_SIZE, config.TILE_SIZE), dtype=np.float32)
     mask = np.empty((n, 1, config.TILE_SIZE, config.TILE_SIZE), dtype=np.uint8)
-    air = (np.empty((n, 3, config.TILE_SIZE, config.TILE_SIZE), dtype=np.uint8)
-           if need_airphoto else None)
+    # 航空写真は地形量より高解像度のことがある（*_sam_apm256.pkl など）。
+    # TILE_SIZE で決め打ちすると、そこで形が合わずに落ちるので実データから取る。
+    air = None
+    if need_airphoto:
+        air_px = np.asarray(ds.AirPhoto[sel[0]]).shape[0] if n else config.TILE_SIZE
+        air = np.empty((n, 3, air_px, air_px), dtype=np.uint8)
+        if verbose and air_px != config.TILE_SIZE:
+            print(f"  航空写真は {air_px}x{air_px}（地形量は {config.TILE_SIZE}x{config.TILE_SIZE}）",
+                  flush=True)
     no, geo, max_h, min_h = [], [], [], []
 
     for k, i in enumerate(sel):

@@ -1,0 +1,37 @@
+# 実験条件の定義。フォルダを増やせば条件が増える。
+# 重みは dc5-data/weights/<name>/ にあり、ここには置かない。
+name: FinalFusion_SAM_APM256
+arch: HiResAirMultiEncoderUNet
+family: Final
+inputs:
+- key: terrain
+  source: SAM
+  channels: 1
+  field: DEM
+- key: airphoto
+  source: APM
+  channels: 3
+  field: AirPhoto
+augment: false
+bg_ratio: 0.0
+status: active
+label: ''
+note: 航空写真だけ256x256（約2.24m/画素）で受ける。展望.md 6節。構造は従来のMultiEncoderUNetと同一で、高解像度のまま1段畳み込んでから128に落とすだけ。bg_ratio=0
+  なのでテスト集合が出発点と同一
+dataset:
+  Hiroshima: hiroshima_sam_apm256.pkl
+  Shimane: shimane_sam_apm256.pkl
+train:
+  epochs: 1000
+  batch_size: 32
+  lr: 0.0001
+  seed: 42
+  early_stop_patience: 100   # 検証F1がこのエポック数だけ更新されなければ打ち切る
+  split: 6:2:2 (train_test_split test_size=0.2 -> 0.25, random_state=42)
+  model_selection: 検証データのF値が最良のエポック
+  loss:
+    type: focal_tversky
+    alpha: 0.7
+    beta: 0.3
+    gamma: 0.75
+  augment_params: null
