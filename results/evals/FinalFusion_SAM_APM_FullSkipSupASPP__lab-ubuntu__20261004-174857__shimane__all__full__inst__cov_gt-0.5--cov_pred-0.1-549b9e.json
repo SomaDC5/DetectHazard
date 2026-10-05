@@ -1,0 +1,19 @@
+{
+ "condition": "FinalFusion_SAM_APM_FullSkipSupASPP",
+ "eval_id": "FinalFusion_SAM_APM_FullSkipSupASPP__lab-ubuntu__20261004-174857__shimane__all__full__inst__cov_gt-0.5--cov_pred-0.1-549b9e",
+ "evaluated_at": "2026-10-05T12:00:00",
+ "f1": 0.4815,
+ "machine": "lab-ubuntu",
+ "metric_kind": "箇所",
+ "n_gt_instances": "27445",
+ "n_pred_instances": "32921",
+ "note": "連結性8近傍 / 最小サイズ10px / 二値化0.5",
+ "precision": 0.5043,
+ "recall": 0.4607,
+ "region": "shimane",
+ "run_id": "FinalFusion_SAM_APM_FullSkipSupASPP__lab-ubuntu__20261004-174857",
+ "scope": "通常",
+ "setting": "被覆 (cov_gt=0.5, cov_pred=0.1)",
+ "tileset": "全件",
+ "weights_sha256": null
+}

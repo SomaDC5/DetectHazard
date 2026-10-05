@@ -1,0 +1,40 @@
+{
+ "arch": "FullSkipMultiEncoderUNet",
+ "augment": false,
+ "best_epoch": 68,
+ "best_val_f1": 0.67,
+ "bg_ratio": 0.0,
+ "condition": "FinalFusion_SAM_APM_FullSkipSupASPP",
+ "dataset": {
+  "Hiroshima": "hiroshima_sam_apm.pkl",
+  "Shimane": "shimane_sam_apm.pkl"
+ },
+ "epochs_run": 160,
+ "machine": "lab-ubuntu",
+ "note": "results/curves の学習曲線から復元した run 情報",
+ "recorded_at": "2026-10-05T04:09:07",
+ "run_id": "FinalFusion_SAM_APM_FullSkipSupASPP__lab-ubuntu__20261004-174857",
+ "train": {
+  "augment_params": null,
+  "batch_size": 32,
+  "early_stop_patience": 100,
+  "epochs": 1000,
+  "loss": {
+   "alpha": 0.7,
+   "aux_lambda": 0.5,
+   "aux_stages": [
+    2
+   ],
+   "beta": 0.3,
+   "gamma": 0.75,
+   "type": "focal_tversky",
+   "use_aspp": true
+  },
+  "lr": 0.0001,
+  "model_selection": "検証データのF値が最良のエポック",
+  "seed": 42,
+  "split": "6:2:2 (train_test_split test_size=0.2 -> 0.25, random_state=42)"
+ },
+ "trained_at": "20261004-174857",
+ "weights_sha256": null
+}

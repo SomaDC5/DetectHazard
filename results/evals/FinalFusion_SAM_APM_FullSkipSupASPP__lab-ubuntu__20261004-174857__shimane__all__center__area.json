@@ -1,0 +1,18 @@
+{
+ "condition": "FinalFusion_SAM_APM_FullSkipSupASPP",
+ "eval_id": "FinalFusion_SAM_APM_FullSkipSupASPP__lab-ubuntu__20261004-174857__shimane__all__center__area",
+ "evaluated_at": "2026-10-05T12:00:00",
+ "f1": 0.5607,
+ "machine": "lab-ubuntu",
+ "metric_kind": "面積",
+ "n_tiles": 24569.0,
+ "note": "tileanalysis による再推論。ノートブック出力と F値 0.0001 以内で一致",
+ "precision": 0.5581,
+ "recall": 0.5634,
+ "region": "shimane",
+ "run_id": "FinalFusion_SAM_APM_FullSkipSupASPP__lab-ubuntu__20261004-174857",
+ "scope": "境界",
+ "setting": "",
+ "tileset": "全件",
+ "weights_sha256": null
+}

@@ -27,7 +27,7 @@ import torch.nn.functional as F  # noqa: E402
 
 from analysis import config, infer  # noqa: E402
 from analysis.data import build_tileset  # noqa: E402
-from dc5lib.models import build_model, load_weights  # noqa: E402
+from dc5lib.models import build_model_for, load_weights  # noqa: E402
 
 ATTENTION_CONDITIONS = [
     "AttentionUNet_SAM_APM",
@@ -38,7 +38,7 @@ ATTENTION_CONDITIONS = [
 
 @torch.no_grad()
 def run(cond, tiles, device, batch_size=16):
-    model = build_model(cond.model_class).to(device)
+    model = build_model_for(cond).to(device)
     load_weights(model, cond.weights, device=device)
     model.eval()
 
