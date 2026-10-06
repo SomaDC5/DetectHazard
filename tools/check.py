@@ -5,13 +5,14 @@
   - config.yaml があるか、フォルダ名と name が一致しているか
   - 重みがリポジトリ内に紛れ込んでいないか
   - metrics.csv が evals/ と食い違っていないか
+  - ensembles.yaml のメンバーが実在し、bg_ratio が揃っているか
 """
 import subprocess, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from dc5lib import registry, results, paths  # noqa: E402
+from dc5lib import registry, results, paths, ensembles  # noqa: E402
 
-problems = registry.check()
+problems = registry.check() + ensembles.check()
 
 # metrics.csv が最新か
 csv_path = paths.results_dir() / "metrics.csv"
