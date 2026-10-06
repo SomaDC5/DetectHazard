@@ -1,0 +1,37 @@
+{
+ "arch": "HiResAirAttentionMultiEncoderUNet",
+ "augment": false,
+ "best_epoch": 55,
+ "best_val_f1": 0.6728,
+ "bg_ratio": 0.0,
+ "condition": "AttentionUNet_SAM_APM256",
+ "dataset": {
+  "Hiroshima": "hiroshima_sam_apm256.pkl",
+  "Shimane": "shimane_sam_apm256.pkl"
+ },
+ "epochs_run": 150,
+ "machine": "lab-ubuntu",
+ "note": "results/curves の学習曲線から復元した run 情報",
+ "recorded_at": "2026-10-06T10:32:08",
+ "run_id": "AttentionUNet_SAM_APM256__lab-ubuntu__20261005-200000",
+ "train": {
+  "augment_params": null,
+  "batch_size": 32,
+  "early_stop_patience": 100,
+  "epochs": 1000,
+  "loss": {
+   "alpha": 0.7,
+   "beta": 0.3,
+   "gamma": 0.75,
+   "type": "focal_tversky"
+  },
+  "lr": 0.0001,
+  "model_selection": "検証データのF値が最良のエポック",
+  "seed": 42,
+  "split": "6:2:2 (train_test_split test_size=0.2 -> 0.25, random_state=42)",
+  "test_size": 0.2,
+  "val_size": 0.25
+ },
+ "trained_at": "20261005-200000",
+ "weights_sha256": null
+}
