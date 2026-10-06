@@ -15,7 +15,7 @@ inputs:
 augment: false
 bg_ratio: 0.0
 status: active
-label: ''
+label: Attention SAM+APM 256px
 note: Attention ゲート + 航空写真だけ 256x256（約2.24m/画素）。展望.md 6節。
   解像度と Attention の2つを同時に変えているので効果の切り分けはできない。
   解像度だけの効果は Attention なしの条件と並べて見ること。

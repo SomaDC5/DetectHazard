@@ -24,6 +24,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from dc5lib import paths, results, registry   # noqa: E402
 
+def _int(v):
+    """CSV の欄が空のこともあるので、数にできるときだけ数にする。"""
+    if v in ("", None):
+        return None
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return None
+
+
 def _conditions_in_report(rep):
     """report/*.csv に出てくる条件名を集める。取り込み対象の既定になる。"""
     found = set()
@@ -125,6 +135,9 @@ def main():
                 recall=row.get(f"{prefix}{scope}_recall"),
                 precision=row.get(f"{prefix}{scope}_precision"),
                 f1=row[k], n_tiles=row.get("n_tiles"),
+                tp=_int(row.get(f"{prefix}{scope}_tp")),
+                fp=_int(row.get(f"{prefix}{scope}_fp")),
+                fn=_int(row.get(f"{prefix}{scope}_fn")),
                 evaluated_at=when, machine=machine,
                 weights_sha256=sha.get(cond),
                 note="tileanalysis による再推論。ノートブック出力と F値 0.0001 以内で一致")
@@ -157,6 +170,9 @@ def main():
                         tileset=tileset, scope="通常", metric_kind="面積",
                         recall=r[f"{col}_recall"], precision=r[f"{col}_precision"],
                         f1=r[f"{col}_f1"], n_tiles=r.get(f"{col}_n"),
+                        tp=_int(r.get(f"{col}_tp")),
+                        fp=_int(r.get(f"{col}_fp")),
+                        fn=_int(r.get(f"{col}_fn")),
                         evaluated_at=when, machine=machine,
                         weights_sha256=sha.get(cond),
                         note="テスト集合の作り方を地域間で揃えた集計")
@@ -177,6 +193,11 @@ def main():
                 scope="通常", metric_kind="箇所", setting=r["設定"],
                 recall=r["箇所Recall"], precision=r["箇所Precision"], f1=r["箇所F値"],
                 n_gt_instances=r["箇所_正解数"], n_pred_instances=r["箇所_予測数"],
+                tp=_int(r.get("検出できた正解")),
+                fn=(_int(r.get("箇所_正解数")) - _int(r.get("検出できた正解"))
+                    if r.get("検出できた正解") not in ("", None) else None),
+                fp=(_int(r.get("箇所_予測数")) - _int(r.get("的中した予測"))
+                    if r.get("的中した予測") not in ("", None) else None),
                 evaluated_at=when, machine=machine,
                 weights_sha256=sha.get(cond),
                 note="連結性8近傍 / 最小サイズ10px / 二値化0.5")

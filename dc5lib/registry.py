@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,6 +42,31 @@ class Input:
     def __post_init__(self):
         if not self.field:
             self.field = {"terrain": "DEM", "airphoto": "AirPhoto"}.get(self.key, self.key)
+
+
+
+# 構造の短い呼び名。ここに無い構造はクラス名から機械的に作るので、
+# 新しいモデルを足したときに書き忘れても表示名は壊れない。
+# 値が "" のものは「その系統の標準の構造」で、表示名には出さない。
+ARCH_JA = {
+    "UNet": "", "EarlyFusionUNet": "", "MiddleFusionUNet": "",
+    "MultiEncoderUNet": "", "AttentionMultiEncoderUNet": "", "TransUNetDual": "",
+    "FullSkipMultiEncoderUNet": "全スケール結合",
+    "AllSkipDeepSupMultiEncoderUNet": "全スキップ+深層監督",
+    "DeepSupMultiEncoderUNet": "深層監督",
+    "ASPPDeepSupMultiEncoderUNet": "ASPP+深層監督",
+    "ASPPStride4MultiEncoderUNet": "ASPP+ストライド4",
+    "ASPPStride8MultiEncoderUNet": "ASPP+ストライド8",
+    "SupAttnMultiEncoderUNet": "監督Attention",
+    "SupAttnPerBranchMultiEncoderUNet": "監督Attention(枝別)",
+}
+
+
+def arch_tag(arch: str) -> str:
+    """構造の短い呼び名。未登録ならクラス名から接尾辞を落として使う。"""
+    if arch in ARCH_JA:
+        return ARCH_JA[arch]
+    return re.sub(r"(MultiEncoder)?UNet(Dual)?$", "", arch) or arch
 
 
 @dataclass
@@ -117,7 +143,31 @@ class Condition:
             inputs = self.inputs[0].source + " のみ"
         else:
             inputs = "+".join(i.source for i in self.inputs)
-        return f"{'拡張+' if self.augment else ''}{fam} {inputs}"
+        base = f"{'拡張+' if self.augment else ''}{fam} {inputs}"
+        # 損失が既定と違うなら、それも名前に出す。
+        # そうしないと「損失だけ違う条件」が同じラベルになり、
+        # 図や表で区別できなくなる。
+        loss = (self.train or {}).get("loss") or {}
+        kind = loss.get("type", "focal_tversky")
+        if kind == "instance_weighted_focal_tversky":
+            base += f" 箇所損失p{loss.get('p', '?')}"
+        elif kind != "focal_tversky":
+            base += f" {kind}"
+        if self.bg_ratio:
+            base += f" bg{self.bg_ratio}"
+        # 構造が系統の標準と違うなら、それも名前に出す。
+        # 同じクラスでも補助出力やASPPの有無で別条件になるので、そこも拾う。
+        parts = []
+        tag = arch_tag(self.arch)
+        if tag:
+            parts.append(tag)
+        if loss.get("aux_stages") and "監督" not in tag:
+            parts.append("監督")
+        if loss.get("use_aspp") and "ASPP" not in tag:
+            parts.append("ASPP")
+        if parts:
+            base += " " + "+".join(parts)
+        return base
 
 
 def load_one(config_path: Path) -> Condition:
@@ -244,9 +294,24 @@ def _check_notebook_matches_config(name, c):
     return problems
 
 
+def _check_labels():
+    """図表に出す表示ラベルが重複していないか。
+
+    重複すると、図の棒や表の行がどの条件のものか区別できなくなる。
+    条件が増えるほど起きやすいので、検査で止める。
+    """
+    import collections
+    seen = collections.defaultdict(list)
+    for c in load_all(include_excluded=True):
+        seen[c.display()].append(c.name)
+    return [f"表示ラベル「{lab}」が {len(v)} 条件で重複しています: {v}"
+            f"（config.yaml の label で区別してください）"
+            for lab, v in seen.items() if len(v) > 1]
+
+
 def check():
     """CI / コミット前に回す検査。異常があれば行を返す。"""
-    problems = _check_unicode_paths()
+    problems = _check_unicode_paths() + _check_labels()
     names = [p.name for p in sorted(paths.experiments_dir().iterdir()) if p.is_dir()]
 
     # exFAT と Windows は大文字小文字を区別しないが、Ubuntu の ext4 は区別する。
