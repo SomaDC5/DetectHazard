@@ -1,0 +1,42 @@
+# 実験条件の定義。フォルダを増やせば条件が増える。
+# 重みは dc5-data/weights/<name>/ にあり、ここには置かない。
+name: AttentionUNet_SAM_APM256
+arch: HiResAirAttentionMultiEncoderUNet
+family: Attention
+inputs:
+- key: terrain
+  source: SAM
+  channels: 1
+  field: DEM
+- key: airphoto
+  source: APM
+  channels: 3
+  field: AirPhoto
+augment: false
+bg_ratio: 0.0
+status: active
+label: Attention SAM+APM 256px
+note: Attention ゲート + 航空写真だけ 256x256（約2.24m/画素）。展望.md 6節。
+  解像度と Attention の2つを同時に変えているので効果の切り分けはできない。
+  解像度だけの効果は Attention なしの条件と並べて見ること。
+  deck の「Attention は絞り込めているが精度に繋がらない」は、絞り込む先の
+  情報が 4.48m/画素しか無かったためではないか、という仮説を試す。
+dataset:
+  Hiroshima: hiroshima_sam_apm256.pkl
+  Shimane: shimane_sam_apm256.pkl
+train:
+  epochs: 1000
+  batch_size: 32
+  lr: 0.0001
+  seed: 42
+  test_size: 0.2            # 全体から切るテストの割合
+  val_size: 0.25            # trainval から切る検証の割合（全体の約2割）
+  early_stop_patience: 100   # 検証F1がこのエポック数だけ更新されなければ打ち切る
+  split: 6:2:2 (train_test_split test_size=0.2 -> 0.25, random_state=42)
+  model_selection: 検証データのF値が最良のエポック
+  loss:
+    type: focal_tversky
+    alpha: 0.7
+    beta: 0.3
+    gamma: 0.75
+  augment_params: null

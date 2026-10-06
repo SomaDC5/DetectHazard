@@ -1,0 +1,18 @@
+{
+ "condition": "AttentionUNet_SAM_APM256",
+ "eval_id": "AttentionUNet_SAM_APM256__lab-ubuntu__20261005-200000__shimane__all__center__area",
+ "evaluated_at": "2026-10-06T10:30:00",
+ "f1": 0.5709,
+ "machine": "lab-ubuntu",
+ "metric_kind": "面積",
+ "n_tiles": 24569.0,
+ "note": "tileanalysis による再推論。ノートブック出力と F値 0.0001 以内で一致",
+ "precision": 0.5443,
+ "recall": 0.6002,
+ "region": "shimane",
+ "run_id": "AttentionUNet_SAM_APM256__lab-ubuntu__20261005-200000",
+ "scope": "境界",
+ "setting": "",
+ "tileset": "全件",
+ "weights_sha256": null
+}

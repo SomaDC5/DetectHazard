@@ -226,6 +226,74 @@ def _check_unicode_paths():
     return problems
 
 
+def _notebook_sources(name):
+    """その条件のノートブックのコードセルを1本の文字列にして返す。"""
+    import json
+    out = []
+    for nbp in sorted(paths.experiment_dir(name).glob("*.ipynb")):
+        try:
+            nb = json.loads(nbp.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        out.append((nbp.name, "\n".join("".join(c.get("source", []))
+                                        for c in nb.get("cells", [])
+                                        if c.get("cell_type") == "code")))
+    return out
+
+
+def _check_notebook_matches_config(name, c):
+    """config とノートブックの食い違いを止める。
+
+    config を書き換えてもノートブックが直書きのままだと、**学習が最後まで
+    走ってから初めて気づく。** 実際に FinalFusion_SAM_APM256 で 310 エポック
+    回したあと、使われていたのが別の pkl と別のモデルだったことが分かった。
+
+    古い条件のノートブックは pkl 名もモデルも直書きしている。そこを
+    --from のひな形にすると、config だけ新しくなって中身が追従しない。
+    """
+    import re
+    problems = []
+    for fn, src in _notebook_sources(name):
+        where = f"{name}/{fn}"
+
+        # (1) 読み込む pkl が config の dataset と一致しているか
+        for region, pkl in set(re.findall(
+                r'dataset_path\(\s*"(\w+)"\s*,\s*"([\w\.\-]+)"\s*\)', src)):
+            want = c.dataset.get(region)
+            if want and pkl != want:
+                problems.append(
+                    f"{where}: 読み込む pkl が config と違います — "
+                    f"ノートブック '{pkl}' / config '{want}'。"
+                    f"config から引くには pkl_for() を使ってください")
+
+        # (2) 作られるモデルが config の arch と一致しているか
+        #     build_model を使っていれば config 駆動なので問題ない。
+        #     直書きの古いノートブックは、**書いてあるクラス名が arch と
+        #     一致していれば実害が無い**ので止めない。一致しないものだけ止める。
+        if "build_model" not in src:
+            from .models import MODEL_CLASSES
+            hard = set(re.findall(r'\bmodel\s*=\s*([A-Za-z_]\w*)\s*\(', src))
+            # `model = ModelClass(...)` のように変数経由で作っているものは、
+            # ここでは解決できないので触らない。**実在のクラス名を直書き
+            # している場合だけ**、arch と一致しているかを見る。
+            named = hard & set(MODEL_CLASSES)
+            if named and c.arch not in named:
+                problems.append(
+                    f"{where}: 作られるモデルが config の arch と違います — "
+                    f"ノートブック {sorted(named)} / config '{c.arch}'。"
+                    f"config を変えてもノートブックが追従していません")
+
+        # (3) config に early_stop_patience があるのに、ノートブックに
+        #     対応するコードが無いと、黙って epochs の上限まで走り続ける
+        if (c.train or {}).get("early_stop_patience"):
+            if "EARLY_STOP_PATIENCE" not in src or "epochs_since_best" not in src:
+                problems.append(
+                    f"{where}: config に early_stop_patience があるのに、"
+                    f"ノートブックに早期終了のコードがありません。"
+                    f"epochs の上限まで走り続けます")
+    return problems
+
+
 def _check_labels():
     """図表に出す表示ラベルが重複していないか。
 
@@ -290,6 +358,7 @@ def check():
                         f"'{fn}' には含まれていないようです")
 
         if c.status == "active":
+            problems += _check_notebook_matches_config(n, c)
             try:
                 from .models import MODEL_CLASSES, forward_arity
                 if c.arch not in MODEL_CLASSES:

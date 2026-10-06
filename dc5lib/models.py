@@ -1315,6 +1315,111 @@ class FullSkipMultiEncoderUNet(MultiEncoderUNet):
         return (out, aux) if return_aux else out
 
 
+class _HiResAirStem(nn.Module):
+    """航空写真を高解像度のまま1段畳み込んでから、地形量の解像度まで落とす。
+
+    航空写真はズーム18（約0.49 m/画素）で取得しているのに、DEM に合わせて
+    128x128（約4.48 m/画素）へ縮めてから保存していた。線形で約9倍、
+    面積で約83倍を捨てている（docs/展望.md 6節）。
+
+    256x256（約2.24 m/画素）で受けて、**その解像度で特徴を取ってから**
+    pool で 128 に落とす。以降の枝・スキップ・デコーダは一切変わらないので、
+    差は「2.24 m/画素の情報が入るかどうか」だけになる。
+    """
+
+    def __init__(self, out_ch=32, block=None):
+        super().__init__()
+        mk = block or _shared_conv_block
+        self.stem = mk(3, out_ch)
+        self.pool = nn.MaxPool2d(2)
+
+    def forward(self, air):
+        return self.pool(self.stem(air))
+
+
+def _require_hires(air, dem):
+    """航空写真が高解像度で来ているか確かめる。pkl の取り違えを検知する。"""
+    if air.shape[-1] == dem.shape[-1]:
+        raise ValueError(
+            f"航空写真が高解像度ではありません（air={tuple(air.shape[-2:])}, "
+            f"dem={tuple(dem.shape[-2:])}）。*_sam_apm256.pkl を使っているか確認してください。")
+
+
+class HiResAirAttentionMultiEncoderUNet(AttentionMultiEncoderUNet):
+    """Attention ゲート + 航空写真だけ高解像度（256x256）。
+
+    なぜこの組み合わせか
+      deck では「Attention は 32px の段で地形量を警戒区域へ +0.25 絞り込んで
+      いるのに、F値が変わらない＝ゲートが冗長」と結論していた。
+      **絞り込む先の情報が 4.48 m/画素しか無かった**可能性がある。
+      2.24 m/画素にすると、ゲートが選ぶ材料そのものが増える。
+
+      ただし解像度と Attention の2つを同時に変えるので、**効果の切り分けは
+      できない。** 解像度だけの効果は FinalFusion_SAM_APM256（Attention なし）
+      と並べて見ること。
+
+    変えたのは航空写真の入口だけで、Attention ゲートもデコーダも
+    AttentionMultiEncoderUNet のまま。
+    """
+
+    STEM_CH = 32
+
+    def __init__(self, out_channels=1, stem_ch=STEM_CH):
+        super().__init__(out_channels=out_channels)
+        self.air_in = _HiResAirStem(stem_ch)
+        self.curv_enc1 = _shared_conv_block(stem_ch, 64)
+
+    def forward(self, dem, air, return_attention=False):
+        _require_hires(air, dem)
+        return super().forward(dem, self.air_in(air), return_attention=return_attention)
+
+
+class HiResAirMultiEncoderUNet(MultiEncoderUNet):
+    """航空写真だけ高解像度（256x256）で受ける版。
+
+    なぜこの方向か（docs/展望.md 6節）
+      航空写真はズーム18（約0.49 m/画素）で取得しているのに、DEM に合わせて
+      128x128（約4.48 m/画素）へ縮めてから保存していた。
+      **線形で約9倍、面積で約83倍を捨てている。**
+
+      構造を変える方向は4つ連続で効果が無かった（深層監督・監督つき
+      Attention・全スケール結合・その組み合わせ）。残っているのは入力側。
+
+    何を変えたか
+      航空写真を 256x256（約2.24 m/画素）で受け、**その解像度のまま1段
+      畳み込んでから** 128 に落とす。地形量の枝と、スキップ接続と、
+      デコーダは**一切変えていない**。
+
+          地形量  (1,128,128) → slope_enc1 …            （従来どおり）
+          航空写真(3,256,256) → air_stem → pool → curv_enc1 …
+
+      出力は従来どおり 128x128 なので、マスクも評価コードもそのまま使える。
+      差は「航空写真の 2.24 m/画素の情報が入るかどうか」だけになり、
+      解像度の効果を単独で測れる。
+
+    必要なデータセット
+      dc5-data/datasets/<地域>/*_sam_apm256.pkl
+      tools/dataset_build/rebuild_apm_highres.py で既存 pkl から作る。
+      タイル番号・DEM・マスク・並び順は元と同一なので、学習時の分割が
+      再現され、既存条件と直接比較できる。
+
+    メモリ
+      APM が 4倍になるので pkl は 5.0GB → 10.6GB（広島）。31GB の
+      マシンで扱える上限。512 にすると 30GB で読み込めない。
+    """
+
+    STEM_CH = 32
+
+    def __init__(self, out_channels=1, stem_ch=STEM_CH):
+        super().__init__(out_channels=out_channels)
+        self.air_in = _HiResAirStem(stem_ch, block=self.conv_block)
+        self.curv_enc1 = self.conv_block(stem_ch, 64)
+
+    def forward(self, dem, air):
+        _require_hires(air, dem)
+        return super().forward(dem, self.air_in(air))
+
+
 MODEL_CLASSES = {
     "UNet": UNet,
     "MultiEncoderUNet": MultiEncoderUNet,
@@ -1330,6 +1435,8 @@ MODEL_CLASSES = {
     "ASPPStride8MultiEncoderUNet": ASPPStride8MultiEncoderUNet,
     "ASPPStride4MultiEncoderUNet": ASPPStride4MultiEncoderUNet,
     "FullSkipMultiEncoderUNet": FullSkipMultiEncoderUNet,
+    "HiResAirMultiEncoderUNet": HiResAirMultiEncoderUNet,
+    "HiResAirAttentionMultiEncoderUNet": HiResAirAttentionMultiEncoderUNet,
 }
 
 
