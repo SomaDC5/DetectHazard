@@ -130,45 +130,44 @@ def main():
     for c in conds:
         by_pkl.setdefault(str(c.pkl_for(_region_dir(args.region))), []).append(c)
 
-    probs, gts, nos = {}, {}, {}
-    for pkl, group in by_pkl.items():
+    # 逐次に足し込む。全条件の確率を同時に持つと、島根24,569枚 x 14条件で
+    # 11GB を超えて 31GB のマシンで OOM になる。
+    #   1条件の確率 float16 = 805MB（島根）/ 97MB（広島）
+    rows = []
+    ref_no = None          # タイルの基準順。最初の pkl のもの
+    gt = None
+    mix = None             # 重みつき和（float32）
+
+    for pi, (pkl, group) in enumerate(by_pkl.items()):
         print(f"\n読み込み: {os.path.basename(pkl)}")
         tiles = adata.build_tileset(pkl, args.region, any(c.use_airphoto for c in group),
                                     group[0].bg_ratio, verbose=True)
-        gts[pkl] = (tiles.mask[:, 0] > 0)
-        nos[pkl] = list(tiles.no)
+        no = list(tiles.no)
+        g = (tiles.mask[:, 0] > 0)
+        if ref_no is None:
+            ref_no, gt = no, g
+            mix = np.zeros(gt.shape, dtype=np.float32)
+            order = np.arange(len(no))
+        else:
+            if set(no) != set(ref_no):
+                sys.exit(f"pkl 間でタイル集合が違います（{os.path.basename(pkl)}）。"
+                         f"同じ分割の条件だけを指定してください")
+            pos = {t: k for k, t in enumerate(no)}
+            order = np.array([pos[t] for t in ref_no])
+            if not np.array_equal(g[order], gt):
+                sys.exit("pkl 間で正解マスクが一致しません。突き合わせを確認してください")
         for c in group:
             print(f"  推論 {c.name} …", flush=True)
-            probs[c.name] = predict(c, tiles, device, args.batch_size)
-        del tiles
+            pr = predict(c, tiles, device, args.batch_size)[order]
+            if args.each:
+                r = evaluate(gt, pr, thr); r["対象"] = c.name; rows.append(r)
+            mix += float(w[args.conditions.index(c.name)]) * pr.astype(np.float32)
+            del pr
+            gc.collect()
+        del tiles, g
         gc.collect()
 
-    # タイル番号で突き合わせる（pkl が違っても並びが違うだけ）
-    common = None
-    for pkl in by_pkl:
-        s = set(nos[pkl])
-        common = s if common is None else (common & s)
-    common = sorted(common)
-    print(f"\n共通タイル {len(common)} 枚")
-    idx = {pkl: [nos[pkl].index(t) for t in common] for pkl in by_pkl}
-    pkl0 = next(iter(by_pkl))
-    gt = gts[pkl0][idx[pkl0]]
-    for pkl in by_pkl:                      # 正解が一致しているか確かめる
-        if not np.array_equal(gts[pkl][idx[pkl]], gt):
-            sys.exit("pkl 間で正解マスクが一致しません。突き合わせを確認してください")
-
-    aligned = {}
-    for c in conds:
-        pkl = str(c.pkl_for(_region_dir(args.region)))
-        aligned[c.name] = probs[c.name][idx[pkl]]
-
-    rows = []
-    if args.each:
-        for c in conds:
-            r = evaluate(gt, aligned[c.name], thr); r["対象"] = c.name; rows.append(r)
-    mix = np.zeros(gt.shape, dtype=np.float32)
-    for c, wi in zip(conds, w):
-        mix += wi * aligned[c.name].astype(np.float32)
+    print(f"\n共通タイル {len(ref_no)} 枚")
     r = evaluate(gt, mix, thr)
     r["対象"] = "アンサンブル（" + "+".join(c.name for c in conds) + "）"
     rows.append(r)
