@@ -1,0 +1,105 @@
+# 複数条件の予測確率を混ぜて評価する「アンサンブル」の定義。
+# 増やすときはここに1つ足すだけ。コードは変えない。
+#
+#   評価   python analysis/run_ensemble_eval.py --ensemble <名前> --region hiroshima
+#   記録   上に --record を付けると results/evals/ に入り metrics.csv に載る
+#   一覧   python -m dc5lib.ensembles
+#
+# なぜ experiments/ ではなくここなのか → dc5lib/ensembles.py の冒頭
+#
+# 項目
+#   members    混ぜる条件名。experiments/ にある条件であること
+#              **bg_ratio が揃っていること。** 揃っていないと背景タイルの
+#              混ぜ方が変わって分割がずれ、タイルが突き合わない（check.py が止める）
+#   weights    members と同じ順。省略（null）で単純平均。合計1でなくてよい（正規化する）
+#   rule       mean（既定） / max / median
+#              **max は OR の連続版で、実測では最下位だった**
+#              （docs/アンサンブルで解けるか.md 2.1: 平均0.7102 / 最大0.6974 / cos窓0.7446）
+#   threshold  二値化しきい値。既定 0.5
+#              単体のモデルは出力が飽和していてしきい値がほぼ効かないが
+#              （同8.1: 0.02〜0.98 で箇所Recall 0.630→0.606）、平均すると
+#              中間値が増えるので、アンサンブルでは効く可能性がある
+#   status     active / excluded（excluded は一覧に出るが評価しない）
+
+ensembles:
+
+  # --- 構造の多様性だけ（入力は SAM+APM に固定）--------------------------
+  Ens_Struct4:
+    label: アンサンブル 構造4種
+    note: >
+      Middle / Final / Attention / TransUNet。入力は SAM+APM に固定して
+      構造だけ変えた4条件。docs/アンサンブルで解けるか.md 3.1 の5条件から
+      Early（明確に劣る）を除いたもの。タイルごとに最良を選ぶ天井は +0.0744。
+      実測 広島 面積F 0.6927 / 箇所F 0.6732
+    members:
+      - MiddleFusion_SAM_APM
+      - FinalFusion_SAM_APM
+      - AttentionUNet_SAM_APM
+      - TransUNet_SAM_APM
+
+  # --- 入力の多様性 ------------------------------------------------------
+  Ens_InputPair2:
+    label: アンサンブル 入力2種
+    note: >
+      DEM系 + SAM系。強い条件どうしで相関が最も低い組（0.755）。
+      実測 広島 面積F 0.7052 / 箇所F 0.6542
+    members:
+      - DataOgument_FinalFusion_DEM_APM
+      - MiddleFusion_SAM_APM
+
+  Ens_InputDiverse4:
+    label: アンサンブル 入力2種x構造2種
+    note: >
+      入力の多様性と構造の多様性を掛けたもの。**面積Fはこれが最良。**
+      同じ4条件でも Ens_Struct4 より +0.027 上で、
+      「相関が最も低いのは入力の違い」（同8.3）と整合する。
+      実測 広島 面積F 0.7200 / 箇所F 0.6844 ／ 島根 面積F 0.5721 / 箇所F 0.4943
+    members:
+      - DataOgument_FinalFusion_DEM_APM
+      - AttentionUNet_DEM_APM
+      - DataOgument_FinalFusion_SAM_APM
+      - AttentionUNet_SAM_APM
+
+  # --- 全部混ぜる --------------------------------------------------------
+  Ens_AllStrong14:
+    label: アンサンブル 全条件14
+    note: >
+      全体F1 0.67 以上の bg_ratio=0 条件すべて。**箇所Fはこれが最良。**
+      数を増やすと保守的になり、箇所Precision を買って箇所Recall を失う。
+      広島だけ見ると面積Fが Ens_InputDiverse4 より下がるが、
+      **島根では面積Fも上**（同10.3）。汎化重視なら条件数は多いほうがよい。
+      実測 広島 面積F 0.7142 / 箇所F 0.6958 ／ 島根 面積F 0.5763 / 箇所F 0.5243
+    members:
+      - FinalFusion_SAM_APM
+      - FinalFusion_SAM_APM_FullSkip
+      - FinalFusion_SAM_APM_FullSkipSupASPP
+      - AttentionUNet_SAM_APM256
+      - AttentionUNet_SAM_APM
+      - AttentionUNet_DEM_APM
+      - DataOgument_FinalFusion_DEM_APM
+      - FinalFusion_DEM_APM
+      - MIddleFusion_DEM_APM
+      - DataOgument_AttentionUNet_SAM_APM
+      - DataOgument_FinalFusion_SAM_APM
+      - FinalFusion_SAM_APM_InstLoss
+      - MiddleFusion_SAM_APM
+      - TransUNet_SAM_APM
+
+# 増やす例（status: excluded なので評価されない。試すときに active にする）
+#
+#  Ens_Bg10Family:
+#    label: アンサンブル bg10系
+#    note: bg_ratio=0.1 の条件だけで組む。bg_ratio=0 とは分割が違うので混ぜられない
+#    status: excluded
+#    members:
+#      - FinalFusion_SAM_APM_bg10
+#      - FinalFusion_SAM_APM_bg10_DeepSup
+#      - FinalFusion_SAM_APM_bg10_SupAttn
+#      - FinalFusion_SAM_APM_bg10_ASPP
+#
+#  Ens_InputDiverse4_Median:
+#    label: アンサンブル 入力2種x構造2種（中央値）
+#    note: 統合規則だけを変えた版。平均との差を見る
+#    status: excluded
+#    rule: median
+#    members: [...]

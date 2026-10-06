@@ -53,6 +53,7 @@ from analysis.run_instance_eval import SETTINGS                   # noqa: E402
 from dc5lib.instance_eval import PRIMARY                          # noqa: E402
 from dc5lib.models import build_model_for, load_weights           # noqa: E402
 from dc5lib.registry import get                                   # noqa: E402
+from dc5lib import ensembles as ens                               # noqa: E402
 from dc5lib.device import pick_device                             # noqa: E402
 
 def predict(cond, tiles, device, batch_size=32):
@@ -77,35 +78,92 @@ def predict(cond, tiles, device, batch_size=32):
     return out
 
 
-def evaluate(gt, prob, thr, connectivity=8, min_size=10):
-    """面積と箇所の両方を返す。run_instance_eval と同じ設定で測る。"""
+def evaluate(gt, prob, thr, connectivity=8, min_size=10, full=False):
+    """面積（通常・境界）と箇所（全設定）を返す。
+
+    full=False なら画面表示用に主要値だけ。True なら記録用に全設定。
+    境界は四辺から config.BORDER_CROP を落とした中心のみ（既存の評価と同じ）。
+    """
     pred = prob.astype(np.float32) > thr
-    tp = int(np.logical_and(pred, gt).sum())
-    fp = int(np.logical_and(pred, ~gt).sum())
-    fn = int(np.logical_and(~pred, gt).sum())
-    area_f1 = 2 * tp / (2 * tp + fp + fn) if (2 * tp + fp + fn) else 0.0
+
+    def area(p, g):
+        tp = int(np.logical_and(p, g).sum())
+        fp = int(np.logical_and(p, ~g).sum())
+        fn = int(np.logical_and(~p, g).sum())
+        d = 2 * tp + fp + fn
+        return {"f1": 2 * tp / d if d else 0.0,
+                "recall": tp / (tp + fn) if (tp + fn) else 0.0,
+                "precision": tp / (tp + fp) if (tp + fp) else 0.0}
+
+    a_full = area(pred, gt)
+    cr = config.BORDER_CROP
+    a_cent = area(pred[:, cr:-cr, cr:-cr], gt[:, cr:-cr, cr:-cr])
+
     rows = [instances.evaluate_tile_multi(gt[k], pred[k], SETTINGS,
                                           connectivity=connectivity, min_size=min_size)
             for k in range(len(gt))]
-    # run_instance_eval と同じ集計（設定ごとに足し上げる）
-    r = instances.summarize_setting(pd.DataFrame(rows), PRIMARY)
-    return {
-        "面積F": round(area_f1, 4),
-        "面積R": round(tp / (tp + fn), 4) if (tp + fn) else 0.0,
-        "面積P": round(tp / (tp + fp), 4) if (tp + fp) else 0.0,
-        "箇所F": round(float(r["箇所F値"]), 4),
-        "箇所R": round(float(r["箇所Recall"]), 4),
-        "箇所P": round(float(r["箇所Precision"]), 4),
+    df = pd.DataFrame(rows)
+    inst = {name: instances.summarize_setting(df, name) for name in SETTINGS}
+    pr = inst[PRIMARY]
+
+    out = {
+        "面積F": round(a_full["f1"], 4),
+        "面積R": round(a_full["recall"], 4),
+        "面積P": round(a_full["precision"], 4),
+        "箇所F": round(float(pr["箇所F値"]), 4),
+        "箇所R": round(float(pr["箇所Recall"]), 4),
+        "箇所P": round(float(pr["箇所Precision"]), 4),
     }
+    if full:
+        out["_area_full"], out["_area_center"], out["_inst"] = a_full, a_cent, inst
+        out["_n_tiles"] = len(gt)
+    return out
+
+
+def record(name, label, region, cond_bg, res, when=None):
+    """results/evals/ に記録する。metrics.csv は evals だけから作られるので、
+    runs/*.json が無くても単一条件と並んで載る。
+
+    run_id は「学習」ではないので、アンサンブル名 + 機械名 + 日時 で合成する。
+    """
+    from dc5lib import results as R
+    from dc5lib.regions import get as region_get
+
+    tileset = {"hiroshima": "警戒+背景" if cond_bg else "警戒のみ",
+               "hiroshima_bg": "背景のみ", "shimane": "全件"}[region]
+    run_id = R.new_run_id(name, when=when)
+    n = 0
+    for scope, a in (("通常", res["_area_full"]), ("境界", res["_area_center"])):
+        R.record_eval(run_id=run_id, condition=name, region=region, tileset=tileset,
+                      scope=scope, metric_kind="面積",
+                      recall=a["recall"], precision=a["precision"], f1=a["f1"],
+                      n_tiles=res["_n_tiles"],
+                      note=f"アンサンブル（{label}）。ensembles.yaml / run_ensemble_eval.py")
+        n += 1
+    for setting, r in res["_inst"].items():
+        R.record_eval(run_id=run_id, condition=name, region=region, tileset=tileset,
+                      scope="通常", metric_kind="箇所", setting=setting,
+                      recall=r["箇所Recall"], precision=r["箇所Precision"], f1=r["箇所F値"],
+                      n_gt_instances=r["箇所_正解数"], n_pred_instances=r["箇所_予測数"],
+                      note="連結性8近傍 / 最小サイズ10px / アンサンブル")
+        n += 1
+    out = R.build_metrics_csv()
+    print(f"\n記録: evals {n} 件 / metrics.csv を更新（{out}）")
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--region", default="hiroshima",
                     choices=["hiroshima", "hiroshima_bg", "shimane"])
-    ap.add_argument("--conditions", nargs="+", required=True)
+    ap.add_argument("--ensemble", default=None,
+                    help="ensembles.yaml の名前。--conditions の代わりに使う")
+    ap.add_argument("--conditions", nargs="*", default=None)
     ap.add_argument("--weights", nargs="*", type=float, default=None,
                     help="--conditions と同じ順。省略すると単純平均")
+    ap.add_argument("--rule", default=None, choices=list(ens.RULES),
+                    help="統合規則。既定は mean（ensembles.yaml の rule が優先）")
+    ap.add_argument("--record", action="store_true",
+                    help="results/evals/ に記録して metrics.csv に載せる")
     ap.add_argument("--device", default=None)
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--prob-thr", type=float, default=None)
@@ -113,15 +171,38 @@ def main():
     ap.add_argument("--out", default=None, help="結果を書き出す CSV")
     args = ap.parse_args()
 
-    thr = config.THRESHOLD if args.prob_thr is None else args.prob_thr
-    device = torch.device(args.device) if args.device else pick_device()
-    conds = [get(n) for n in args.conditions]
-    w = np.array(args.weights, dtype=np.float64) if args.weights else np.ones(len(conds))
-    if len(w) != len(conds):
-        sys.exit(f"--weights の数 {len(w)} が --conditions の数 {len(conds)} と合いません")
-    w = w / w.sum()
+    # ensembles.yaml から引くか、コマンドラインで直に指定するか
+    if args.ensemble:
+        if args.conditions:
+            sys.exit("--ensemble と --conditions は同時に指定できません")
+        e = ens.get(args.ensemble)
+        names, weights = list(e.members), e.weights_normalized()
+        rule = args.rule or e.rule
+        thr = args.prob_thr if args.prob_thr is not None else float(e.threshold)
+        label = e.display()
+    elif args.conditions:
+        names = list(args.conditions)
+        weights = ([x / sum(args.weights) for x in args.weights] if args.weights
+                   else [1.0 / len(names)] * len(names))
+        if len(weights) != len(names):
+            sys.exit(f"--weights の数 {len(weights)} が --conditions の数 {len(names)} と合いません")
+        rule = args.rule or "mean"
+        thr = config.THRESHOLD if args.prob_thr is None else args.prob_thr
+        label = "アンサンブル（" + "+".join(names) + "）"
+    else:
+        sys.exit("--ensemble か --conditions のどちらかを指定してください")
 
-    print(f"地域 {args.region} / しきい値 {thr} / device {device}")
+    device = torch.device(args.device) if args.device else pick_device()
+    conds = [get(n) for n in names]
+    w = np.array(weights, dtype=np.float64)
+
+    bgs = {c.bg_ratio for c in conds}
+    if len(bgs) > 1:
+        sys.exit(f"members の bg_ratio が揃っていません {sorted(bgs)}。"
+                 f"背景タイルの混ぜ方が変わって分割がずれ、タイルが突き合いません")
+
+    print(f"{label}")
+    print(f"地域 {args.region} / 規則 {rule} / しきい値 {thr} / device {device}")
     for c, wi in zip(conds, w):
         print(f"  {c.name:<40} 重み {wi:.3f}  pkl {c.dataset.get(_region_dir(args.region))}")
 
@@ -136,7 +217,10 @@ def main():
     rows = []
     ref_no = None          # タイルの基準順。最初の pkl のもの
     gt = None
-    mix = None             # 重みつき和（float32）
+    mix = None             # mean なら重みつき和、max なら最大値（float32）
+    stack = None           # median のときだけ全メンバーを持つ（メモリを食う）
+    if rule == "median":
+        print("  ※ median は全メンバーの確率を同時に持つのでメモリを食います")
 
     for pi, (pkl, group) in enumerate(by_pkl.items()):
         print(f"\n読み込み: {os.path.basename(pkl)}")
@@ -146,7 +230,9 @@ def main():
         g = (tiles.mask[:, 0] > 0)
         if ref_no is None:
             ref_no, gt = no, g
-            mix = np.zeros(gt.shape, dtype=np.float32)
+            mix = (np.zeros(gt.shape, dtype=np.float32) if rule != "max"
+                   else np.zeros(gt.shape, dtype=np.float32))
+            stack = [] if rule == "median" else None
             order = np.arange(len(no))
         else:
             if set(no) != set(ref_no):
@@ -161,19 +247,35 @@ def main():
             pr = predict(c, tiles, device, args.batch_size)[order]
             if args.each:
                 r = evaluate(gt, pr, thr); r["対象"] = c.name; rows.append(r)
-            mix += float(w[args.conditions.index(c.name)]) * pr.astype(np.float32)
+            wi = float(w[names.index(c.name)])
+            if rule == "mean":
+                mix += wi * pr.astype(np.float32)
+            elif rule == "max":
+                np.maximum(mix, pr.astype(np.float32), out=mix)
+            else:                                   # median
+                stack.append(pr.copy())
             del pr
             gc.collect()
         del tiles, g
         gc.collect()
 
     print(f"\n共通タイル {len(ref_no)} 枚")
-    r = evaluate(gt, mix, thr)
-    r["対象"] = "アンサンブル（" + "+".join(c.name for c in conds) + "）"
+    if rule == "median":
+        mix = np.median(np.stack(stack).astype(np.float32), axis=0)
+        del stack
+        gc.collect()
+    res = evaluate(gt, mix, thr, full=True)
+    r = {k: v for k, v in res.items() if not k.startswith("_")}
+    r["対象"] = label
     rows.append(r)
 
     df = pd.DataFrame(rows)[["対象", "面積F", "面積R", "面積P", "箇所F", "箇所R", "箇所P"]]
     print("\n" + df.to_string(index=False))
+
+    if args.record:
+        if not args.ensemble:
+            sys.exit("--record は --ensemble で名前が決まっているときだけ使えます")
+        record(args.ensemble, label, args.region, conds[0].bg_ratio, res)
     if args.out:
         df.to_csv(args.out, index=False, encoding="utf-8")
         print(f"\n書き出し: {args.out}")

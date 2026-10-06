@@ -1,0 +1,18 @@
+{
+ "condition": "Ens_InputDiverse4",
+ "eval_id": "Ens_InputDiverse4__lab-ubuntu__20261006-163059__hiroshima__gtonly__full__inst__IoU--1-1--0.3-49ffab",
+ "evaluated_at": "2026-10-06T16:30:59",
+ "f1": 0.5802,
+ "machine": "lab-ubuntu",
+ "metric_kind": "箇所",
+ "n_gt_instances": 8977,
+ "n_pred_instances": 8709,
+ "note": "連結性8近傍 / 最小サイズ10px / アンサンブル",
+ "precision": 0.5892,
+ "recall": 0.5716,
+ "region": "hiroshima",
+ "run_id": "Ens_InputDiverse4__lab-ubuntu__20261006-163059",
+ "scope": "通常",
+ "setting": "IoU厳密1対1 (0.3)",
+ "tileset": "警戒のみ"
+}
