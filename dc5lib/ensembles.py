@@ -42,9 +42,12 @@ CONFIG = paths.REPO_ROOT / "ensembles.yaml"
 # で、**最大（= OR の連続版）が最下位**だった。既定は mean。
 RULES = {
     "mean":   "重みつき平均（既定）",
-    "max":    "最大。OR の連続版。2.1 の実測では最下位",
+    "max":    "最大。OR の連続版。実測では最下位",
     "median": "中央値。外れたメンバー1つに引きずられにくい",
 }
+
+# weights を使わない規則。指定されていたら check() で止める（黙って無視しない）
+WEIGHTLESS_RULES = {"max", "median"}
 
 
 @dataclass
@@ -132,6 +135,11 @@ def check():
         if e.rule not in RULES:
             problems.append(f"アンサンブル '{e.name}': 未知の rule '{e.rule}'"
                             f"（使えるのは {list(RULES)}）")
+        # weights は mean でしか使われない。median / max に指定しても黙って
+        # 無視されるので、気づけるように止める
+        if e.weights is not None and e.rule in WEIGHTLESS_RULES:
+            problems.append(f"アンサンブル '{e.name}': rule '{e.rule}' は weights を"
+                            f"使いません。weights を消すか rule を mean にしてください")
         if not 0 < float(e.threshold) < 1:
             problems.append(f"アンサンブル '{e.name}': threshold {e.threshold} が 0〜1 の外です")
 
