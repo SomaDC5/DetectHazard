@@ -27,3 +27,7 @@ $RECYCLE.BIN/
 
 # results/metrics.csv は生成物だが、GitHub 上で見たいので追跡する。
 # 衝突したら直さずに `python tools/make_metrics.py` で作り直すこと。
+
+# --- 論文の原稿（GitHub には上げない） ---
+# 本文・図・生成スクリプトごと除外する。手元には残るが push されない。
+docs/論文/
