@@ -62,7 +62,7 @@ from analysis.run_overlap_eval import (DLON, DLAT, OFFSETS, REGION_DIR,  # noqa:
 from dc5lib import ensembles as ens                                 # noqa: E402
 from dc5lib.device import pick_device                               # noqa: E402
 from dc5lib.models import build_model_for, load_weights             # noqa: E402
-from dc5lib.paths import dataset_path, hazard_map_dir               # noqa: E402
+from dc5lib.paths import cache_dir, dataset_path, hazard_map_dir    # noqa: E402
 from dc5lib.registry import get                                     # noqa: E402
 
 TILE = 128
@@ -180,6 +180,12 @@ def main():
     ap.add_argument("--prob-thr", type=float, default=None)
     ap.add_argument("--device", default=None)
     ap.add_argument("--out-dir", default=None)
+    ap.add_argument("--no-cache", action="store_true",
+                    help="条件ごとの確率を保存しない（再開できなくなる）")
+    ap.add_argument("--fresh", action="store_true",
+                    help="保存済みを無視して推論し直す")
+    ap.add_argument("--allow-cpu", action="store_true",
+                    help="GPU が無くても CPU で回す（数十倍遅い）")
     args = ap.parse_args()
 
     # ensembles.yaml から引くか、条件を直に指定するか。
@@ -207,6 +213,13 @@ def main():
 
     overlap = not args.no_overlap
     device = torch.device(args.device) if args.device else pick_device()
+    # **CPU に黙って落ちると、気づかないまま何十分も走る。**
+    # 実際に GPU ドライバが入っていない状態で CPU 推論になり、
+    # 1条件（通常1分）に29分かかった。明示しない限り止める。
+    if device.type == "cpu" and not args.allow_cpu:
+        sys.exit("GPU が使えません（CPU になります）。地図作成は CPU だと数十倍遅いので止めました。\n"
+                 "  確認: nvidia-smi / python -m dc5lib.device\n"
+                 "  それでも CPU で回すなら --allow-cpu を付けてください")
     conds = [get(m) for m in members]
 
     bgs = {c.bg_ratio for c in conds}
@@ -231,6 +244,24 @@ def main():
     for c in conds:
         by_pkl.setdefault(c.pkl_for(REGION_DIR[args.region]).name, []).append(c)
 
+    # ---- 条件ごとに推論して足し込む
+    #
+    # **1条件ぶんの確率を中間ファイルに保存する。** 14条件で65分かかるので、
+    # 途中で落ちたときに全部やり直すのは割に合わない。実際に GPU が
+    # ハングして（Xid 8）2条件目で落ち、1条件ぶん（4.4分）が無駄になった。
+    # 2回目以降は保存済みを読むので、落ちた条件から再開できる。
+    #
+    # **float32 で保存する。** float16 にすると容量は半分になるが、
+    # 再開したときの結果が「推論し直したとき」と一致しない。メンバーが
+    # 飽和していて確率がちょうど 0.5 に乗るため、丸めの差で判定が反転する
+    # （実測で 118,329 画素 = 0.008% が反転した）。再開は同じ結果になるべき。
+    #
+    # 1ファイル 約2.0GB（島根）/ 約0.3GB（広島）。dc5-data/cache/ に置くので
+    # **同期対象には入らない**（hazard_map/ は成果物だけ）。
+    # --no-cache で保存しない。--fresh で保存を無視して取り直す。
+    # 中間確率は **cache 側**に置く。hazard_map/ は同期対象なので、
+    # 11GB の中間物を入れると同期が重くなる。cache は同期されない。
+    pdir = cache_dir("hazard_map_probs", f"{args.region}{'' if overlap else '_nooverlap'}")
     ref_no = None
     acc = None          # 重みつき和。タイル順は ref_no に揃える
     gi = gj = masks = None
@@ -238,20 +269,41 @@ def main():
     for pkl_name, group in by_pkl.items():
         print(f"  [{pkl_name}] {len(group)} 条件")
         for c in group:
-            print(f"    {c.name}")
-            p, g_i, g_j, no, m, meta = predict_region(c, args.region, overlap, device)
+            f = pdir / f"{c.name}.npz"
+            use_cache = f.exists() and not args.fresh
+            if use_cache:
+                print(f"    {c.name}  ← 保存済みを読む（{f.stat().st_size/1e6:.0f} MB）",
+                      flush=True)
+                z = np.load(f, allow_pickle=True)
+                pr, g_i, g_j = z["prob"], z["gi"], z["gj"]
+                no, m = list(z["no"]), z["mask"]
+                meta = dict(z["meta"].item()) if "meta" in z else {}
+                z.close()
+            else:
+                print(f"    {c.name}", flush=True)
+                pr, g_i, g_j, no, m, meta = predict_region(c, args.region, overlap, device)
+                if not args.no_cache:
+                    # **np.savez は拡張子が .npz でないと勝手に付け足す。**
+                    # f.with_suffix(".npz.tmp") にすると X.npz.tmp.npz ができ、
+                    # replace() が存在しないファイルを探して失敗する（実際にやった）
+                    tmp = f.with_name(f.stem + ".tmp.npz")
+                    np.savez(tmp, prob=pr.astype(np.float32), gi=g_i, gj=g_j,
+                             no=np.array(no), mask=m, meta=np.array(meta or {}, dtype=object))
+                    tmp.replace(f)       # 書き終わってから置き換える（中途半端を残さない）
+                    print(f"      保存: {f.name} ({f.stat().st_size/1e6:.0f} MB)", flush=True)
+            pr = pr.astype(np.float32)
             if ref_no is None:
-                ref_no, gi, gj, masks, acc = no, g_i, g_j, m, np.zeros_like(p)
+                ref_no, gi, gj, masks, acc = no, g_i, g_j, m, np.zeros_like(pr)
                 order = np.arange(len(no))
             else:
                 if set(no) != set(ref_no):
                     sys.exit(f"pkl 間でタイル集合が違います（{pkl_name}）")
                 pos = {t: k for k, t in enumerate(no)}
                 order = np.array([pos[t] for t in ref_no])
-            acc += float(w[members.index(c.name)]) * p[order]
+            acc += float(w[members.index(c.name)]) * pr[order]
             metas[c.name] = {k: (float(v) if isinstance(v, (int, float)) else v)
                              for k, v in (meta or {}).items()}
-            del p
+            del pr
             gc.collect()
 
     # ---- 格子に貼り合わせる
