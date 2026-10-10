@@ -94,8 +94,15 @@ def predict_region(cond, region, overlap, device, verbose=True):
     for k in range(n):
         if overlap:
             D, A, _ = mosaic(ds, cell, gi, gj, k)
-            dems = np.stack([D[128 + dy:256 + dy, 128 + dx:256 + dx] for dy, dx in OFFSETS])
-            airs = np.stack([A[128 + dy:256 + dy, 128 + dx:256 + dx] for dy, dx in OFFSETS])
+            # **航空写真は条件によって解像度が違う**（*_sam_apm256.pkl は 256px）。
+            # 地形量で 64px ずらす窓は、航空写真では ap/128 倍ずらす必要がある。
+            # 倍率を掛けないと別の場所を切り出す。
+            ap = A.shape[0] // 3
+            sc = ap // TILE
+            dems = np.stack([D[TILE + dy:2 * TILE + dy, TILE + dx:2 * TILE + dx]
+                             for dy, dx in OFFSETS])
+            airs = np.stack([A[ap + dy * sc:2 * ap + dy * sc, ap + dx * sc:2 * ap + dx * sc]
+                             for dy, dx in OFFSETS])
             t = torch.from_numpy(dems[:, None]).to(device)
             if cond.use_airphoto:
                 a = torch.from_numpy(np.ascontiguousarray(
