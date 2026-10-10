@@ -158,6 +158,21 @@ def dataset_path(region: str, filename: str) -> Path:
     return data_root() / "datasets" / region / filename
 
 
+def hazard_map_dir(*parts) -> Path:
+    """ハザードマップ（GeoTIFF）の置き場所。**cache とは分けている。**
+
+    cache/ は「消えても作り直せる中間物」で sync の対象外。
+    ハザードマップは作り直しに時間がかかる成果物（島根14条件で65分、
+    広島14条件で100分）なので、重み・データセットと同じ扱いにして
+    2台のSSDで同期する（dc5lib/sync.py の KINDS に入っている）。
+
+    容量は4枚揃えても数百MB程度で、重み9.2GB に比べれば無視できる。
+    """
+    p = data_root().joinpath("hazard_map", *parts)
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 def cache_dir(*parts) -> Path:
     p = data_root().joinpath("cache", *parts)
     p.mkdir(parents=True, exist_ok=True)

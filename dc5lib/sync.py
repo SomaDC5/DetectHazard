@@ -34,7 +34,9 @@ from pathlib import Path
 
 from . import paths
 
-KINDS = ("weights", "checkpoints", "datasets")
+# 同期する領域。cache/ は「作り直せる中間物」なので**入れない**（README 1節）。
+# hazard_map/ は作り直しに1〜3時間かかる成果物なので、ここに入れて同期する。
+KINDS = ("weights", "checkpoints", "datasets", "hazard_map")
 FIELDS = ["path", "size", "mtime", "sha256", "kind"]
 
 
