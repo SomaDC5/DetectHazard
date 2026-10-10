@@ -5,7 +5,7 @@ QGIS でそのまま開ける形で出す。タイルを貼り合わせて1枚�
 
     python analysis/run_hazard_map.py --ensemble Ens_InputDiverse4 --region shimane
 
-出力（dc5-data/cache/hazard_map/ に出る。数GBになるのでリポジトリには入れない）
+出力（dc5-data/hazard_map/ に出る。2台のSSDで同期される。リポジトリには入れない）
 
     <アンサンブル名>__<地域>.tif        確率（uint8 0〜100、255 が範囲外）
     <アンサンブル名>__<地域>__mask.tif  二値化（0/1、255 が範囲外）
@@ -62,7 +62,7 @@ from analysis.run_overlap_eval import (DLON, DLAT, OFFSETS, REGION_DIR,  # noqa:
 from dc5lib import ensembles as ens                                 # noqa: E402
 from dc5lib.device import pick_device                               # noqa: E402
 from dc5lib.models import build_model_for, load_weights             # noqa: E402
-from dc5lib.paths import cache_dir, dataset_path                    # noqa: E402
+from dc5lib.paths import dataset_path, hazard_map_dir               # noqa: E402
 from dc5lib.registry import get                                     # noqa: E402
 
 TILE = 128
@@ -218,7 +218,7 @@ def main():
         sys.exit(f"重みがありません: {missing}。SSD を確認してください"
                  f"（python -m dc5lib.sync status）")
 
-    out_dir = Path(args.out_dir) if args.out_dir else cache_dir("hazard_map")
+    out_dir = Path(args.out_dir) if args.out_dir else hazard_map_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{name}__{args.region}" + ("" if overlap else "__nooverlap")
 
