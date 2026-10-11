@@ -93,8 +93,8 @@ class NeighborMosaic:
         a, b = int(self.gi[k]), int(self.gj[k])
         out, ok = {}, np.zeros((3, 3), bool)
         for name, src in planes.items():
-            c = np.asarray(src[k])
-            big = np.zeros((3 * T, 3 * T) + c.shape[2:], dtype=c.dtype)
+            c, _ = _to_hwc(src[k])
+            big = np.zeros((3 * T, 3 * T, c.shape[2]), dtype=c.dtype)
             out[name] = big
 
         for p in (-1, 0, 1):
@@ -105,7 +105,8 @@ class NeighborMosaic:
                 ok[p + 1, q + 1] = True
                 r, c0 = (1 - q) * T, (p + 1) * T
                 for name, src in planes.items():
-                    out[name][r:r + T, c0:c0 + T] = np.asarray(src[m])
+                    tile, _ = _to_hwc(src[m])
+                    out[name][r:r + T, c0:c0 + T] = tile
 
         # 貼れなかったところは中央の鏡像で埋める（評価側と同じ規則）
         for p in (-1, 0, 1):
@@ -120,12 +121,26 @@ class NeighborMosaic:
         return out
 
 
-def _to_hw(arr):
-    """(1,H,W) / (H,W,C) / (H,W) を貼り合わせやすい形に整える。"""
+def _to_hwc(arr):
+    """どの形で来ても (H, W, C) に揃える。元の形は kind で覚えておく。
+
+    dataset2 は (1,H,W) のテンソル、dataset3 は (H,W) や (H,W,3) の配列と
+    形が混ざることがあるので、貼り合わせる前に必ずここを通す。
+    """
     a = np.asarray(arr)
-    if a.ndim == 3 and a.shape[0] in (1, 3) and a.shape[0] < a.shape[-1]:
-        return np.transpose(a, (1, 2, 0)), True      # CHW -> HWC
-    return a, False
+    if a.ndim == 2:
+        return a[:, :, None], "hw"
+    if a.ndim == 3 and a.shape[0] in (1, 3) and a.shape[0] != a.shape[-1]:
+        return np.transpose(a, (1, 2, 0)), "chw"     # CHW -> HWC
+    return a, "hwc"
+
+
+def _from_hwc(a, kind):
+    if kind == "hw":
+        return a[:, :, 0]
+    if kind == "chw":
+        return np.transpose(a, (2, 0, 1))
+    return a
 
 
 class OverlapDataset:
@@ -177,17 +192,17 @@ class OverlapDataset:
             msk = np.asarray(self.mask[k])
         else:
             # 元が CHW だったかを覚えておき、切り出したあとで戻す
-            _, dem_chw = _to_hw(self.dem[k])
-            _, air_chw = _to_hw(self.air[k])
-            _, msk_chw = _to_hw(self.mask[k])
+            _, dem_kind = _to_hwc(self.dem[k])
+            _, air_kind = _to_hwc(self.air[k])
+            _, msk_kind = _to_hwc(self.mask[k])
             big = self.mos.build(k, {"dem": self._plane(self.dem),
                                      "air": self._plane(self.air),
                                      "mask": self._plane(self.mask)})
             dy, dx = self._sample_shift(k)
             r, c = T + dy, T + dx
-            dem = self._restore(big["dem"][r:r + T, c:c + T], dem_chw)
-            air = self._restore(big["air"][r:r + T, c:c + T], air_chw)
-            msk = self._restore(big["mask"][r:r + T, c:c + T], msk_chw)
+            dem = _from_hwc(big["dem"][r:r + T, c:c + T], dem_kind)
+            air = _from_hwc(big["air"][r:r + T, c:c + T], air_kind)
+            msk = _from_hwc(big["mask"][r:r + T, c:c + T], msk_kind)
 
         dem = torch.as_tensor(np.ascontiguousarray(dem)).float()
         air = torch.as_tensor(np.ascontiguousarray(air)).float() / 255.0
@@ -240,14 +255,10 @@ class OverlapDataset:
             self.src = src
 
         def __getitem__(self, k):
-            return _to_hw(self.src[k])[0]
+            return _to_hwc(self.src[k])[0]
 
         def __len__(self):
             return len(self.src)
 
     def _plane(self, src):
         return OverlapDataset._Plane(src)
-
-    @staticmethod
-    def _restore(a, was_chw):
-        return np.transpose(a, (2, 0, 1)) if was_chw and a.ndim == 3 else a
