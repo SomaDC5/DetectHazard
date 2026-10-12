@@ -1,0 +1,36 @@
+# 実験条件の定義。フォルダを増やせば条件が増える。
+# 重みは dc5-data/weights/<name>/ にあり、ここには置かない。
+name: FinalFusion_SAM_APM_OverlapTrain
+arch: MultiEncoderUNet
+family: Final
+inputs:
+- key: terrain
+  source: SAM
+  channels: 1
+  field: DEM
+- key: airphoto
+  source: APM
+  channels: 3
+  field: AirPhoto
+augment: false
+bg_ratio: 0.0
+status: active
+label: Final SAM+APM オーバーラップ学習
+note: オーバーラップ学習。固定格子ではなく、近傍を貼って最大64px ずらした窓で学習する。推論のオーバーラップ（箇所F +0.047〜+0.060）が効くのは学習時と推論時で入力の切り方が違うためで、それを学習側で揃える。実質はランダムクロップ拡張で、データ拡張は学習側で唯一帯を抜けた施策。狙いは再現率。構造は出発点と同一なので、差は切り方だけ。docs/展望_再現率をどう上げるか.md
+  5節
+dataset:
+  Hiroshima: hiroshima_sam_apm.pkl
+  Shimane: shimane_sam_apm.pkl
+train:
+  epochs: 1000
+  batch_size: 32
+  lr: 0.0001
+  seed: 42
+  split: 6:2:2 (train_test_split test_size=0.2 -> 0.25, random_state=42)
+  model_selection: 検証データのF値が最良のエポック
+  loss:
+    type: focal_tversky
+    alpha: 0.7
+    beta: 0.3
+    gamma: 0.75
+  augment_params: null
