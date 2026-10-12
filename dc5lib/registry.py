@@ -241,6 +241,26 @@ def _notebook_sources(name):
     return out
 
 
+def _model_class_names() -> set:
+    """MODEL_CLASSES のキー（モデルクラス名）だけを集める。
+
+    **torch を import せずに済ませている。** tools/check.py は
+    「リポジトリの整合性を見るだけ」の道具なので、torch が入っていない
+    環境（conda env を有効にしていない素の python など）でも動くべき。
+    import できるなら import し、できなければ models.py の本文から
+    キーを読む。どちらでも同じ集合になる。
+    """
+    try:
+        from .models import MODEL_CLASSES
+        return set(MODEL_CLASSES)
+    except Exception:
+        src = (Path(__file__).parent / "models.py").read_text(encoding="utf-8")
+        m = re.search(r"^MODEL_CLASSES\s*=\s*\{(.*?)^\}", src, re.S | re.M)
+        if not m:
+            return set()
+        return set(re.findall(r'"([A-Za-z_]\w*)"\s*:', m.group(1)))
+
+
 def _check_notebook_matches_config(name, c):
     """config とノートブックの食い違いを止める。
 
@@ -271,12 +291,11 @@ def _check_notebook_matches_config(name, c):
         #     直書きの古いノートブックは、**書いてあるクラス名が arch と
         #     一致していれば実害が無い**ので止めない。一致しないものだけ止める。
         if "build_model" not in src:
-            from .models import MODEL_CLASSES
             hard = set(re.findall(r'\bmodel\s*=\s*([A-Za-z_]\w*)\s*\(', src))
             # `model = ModelClass(...)` のように変数経由で作っているものは、
             # ここでは解決できないので触らない。**実在のクラス名を直書き
             # している場合だけ**、arch と一致しているかを見る。
-            named = hard & set(MODEL_CLASSES)
+            named = hard & _model_class_names()
             if named and c.arch not in named:
                 problems.append(
                     f"{where}: 作られるモデルが config の arch と違います — "

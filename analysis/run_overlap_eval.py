@@ -53,10 +53,20 @@ def grid_index(ds):
 
 
 def mosaic(ds, cell, gi, gj, k):
-    """3x3 の近傍を貼り合わせて 384x384 に。欠けた近傍は中央の鏡像で埋める。"""
+    """3x3 の近傍を貼り合わせる。欠けた近傍は中央の鏡像で埋める。
+
+    地形量は 128px 固定だが、**航空写真は条件によって解像度が違う**
+    （*_sam_apm256.pkl は 256px）。航空写真側はその寸法で貼り合わせるので、
+    戻り値 A の1辺は 3 * (航空写真のタイル寸法) になる。
+    決め打ちにすると 256px の条件で
+      ValueError: could not broadcast (256,256,3) into (128,128,3)
+    で落ちる（実際に Ens_AllStrong14 の10条件目で落ちた）。
+    """
+    T = 128                                      # 地形量のタイル寸法
+    ap = int(np.asarray(ds.AirPhoto[k]).shape[0]) if hasattr(ds, "AirPhoto") else T
     a, b = gi[k], gj[k]
-    D = np.zeros((384, 384), np.float32)
-    A = np.zeros((384, 384, 3), np.uint8)
+    D = np.zeros((3 * T, 3 * T), np.float32)
+    A = np.zeros((3 * ap, 3 * ap, 3), np.uint8)
     ok = np.zeros((3, 3), bool)
     for p in (-1, 0, 1):
         for q in (-1, 0, 1):
@@ -64,18 +74,20 @@ def mosaic(ds, cell, gi, gj, k):
             if n is None:
                 continue
             ok[p + 1, q + 1] = True
-            r, c = (1 - q) * 128, (p + 1) * 128     # 緯度は上が大きいので行は反転
-            D[r:r + 128, c:c + 128] = np.asarray(ds.DEM[n], np.float32)
-            A[r:r + 128, c:c + 128] = np.asarray(ds.AirPhoto[n], np.uint8)
+            r, c = (1 - q) * T, (p + 1) * T      # 緯度は上が大きいので行は反転
+            D[r:r + T, c:c + T] = np.asarray(ds.DEM[n], np.float32)
+            ar, ac = (1 - q) * ap, (p + 1) * ap
+            A[ar:ar + ap, ac:ac + ap] = np.asarray(ds.AirPhoto[n], np.uint8)
     for p in (-1, 0, 1):
         for q in (-1, 0, 1):
             if ok[p + 1, q + 1]:
                 continue
-            r, c = (1 - q) * 128, (p + 1) * 128
-            cen_d = D[128:256, 128:256]
-            cen_a = A[128:256, 128:256]
-            D[r:r + 128, c:c + 128] = cen_d[::(-1 if q else 1), ::(-1 if p else 1)]
-            A[r:r + 128, c:c + 128] = cen_a[::(-1 if q else 1), ::(-1 if p else 1)]
+            r, c = (1 - q) * T, (p + 1) * T
+            ar, ac = (1 - q) * ap, (p + 1) * ap
+            cen_d = D[T:2 * T, T:2 * T]
+            cen_a = A[ap:2 * ap, ap:2 * ap]
+            D[r:r + T, c:c + T] = cen_d[::(-1 if q else 1), ::(-1 if p else 1)]
+            A[ar:ar + ap, ac:ac + ap] = cen_a[::(-1 if q else 1), ::(-1 if p else 1)]
     return D, A, bool(ok.all())
 
 
