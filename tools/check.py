@@ -36,6 +36,15 @@ for d in sorted(Path(paths.experiments_dir()).iterdir()):
     hits = [msg for pat, msg in _HARDCODE if re.search(pat, src, re.M)]
     if "train_cfg(CONDITION)" not in src:
         hits.append("config を読んでいない（dc5lib.traincfg を使う）")
+    # 使っているのに import していない名前（セルを順に実行すると NameError）
+    for use, imp, name in (
+            (r"\bget\(CONDITION\)", r"from dc5lib\.registry import[^\n]*\bget\b", "get"),
+            (r"\btrain_cfg\(", r"from dc5lib\.traincfg import[^\n]*\btrain_cfg\b", "train_cfg"),
+            (r"\baux_lambda\(", r"from dc5lib\.losses import[^\n]*\baux_lambda\b", "aux_lambda"),
+            (r"\bOverlapDataset\(", r"from dc5lib\.overlap import[^\n]*\bOverlapDataset\b",
+             "OverlapDataset")):
+        if re.search(use, src) and not re.search(imp, src):
+            hits.append(f"{name} を import していない")
     if hits:
         problems.append(f"{d.name} のノートブック: {' / '.join(hits)}"
                         "（tools/wire_config.py で直せます）")
