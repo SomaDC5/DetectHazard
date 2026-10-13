@@ -23,6 +23,9 @@ _HARDCODE = [
     (r"^EARLY_STOP_PATIENCE\s*=\s*\d+", "早期終了が直書き"),
     (r"lr=1e-4", "学習率が直書き"),
     (r"^model\s*=\s*\w+\(\s*out_channels=1", "モデルのクラス名が直書き"),
+    # 実損失は build_loss から来るが、使われないクラス定義が残っていると
+    # 既定値（alpha=0.8/beta=0.2）が config（0.7/0.3）と違うので直書きに見える
+    (r"class FocalTverskyLoss", "未使用の損失クラスが残っている（読むと直書きに見える）"),
 ]
 _TRAINED = {p.parent.name for p in (paths.results_dir() / "curves").glob("*.csv")}
 for d in sorted(Path(paths.experiments_dir()).iterdir()):
@@ -46,6 +49,10 @@ for d in sorted(Path(paths.experiments_dir()).iterdir()):
              "OverlapDataset")):
         if re.search(use, src) and not re.search(imp, src):
             hits.append(f"{name} を import していない")
+    # NEEDS_WEIGHT を受け取るだけで使っていない。config を箇所正規化損失に
+    # 変えたとき、重みマップを渡さないまま黙って別の損失で学習してしまう
+    if "NEEDS_WEIGHT" in src and src.count("NEEDS_WEIGHT") < 2:
+        hits.append("NEEDS_WEIGHT を受け取るだけで使っていない")
     if hits:
         problems.append(f"{d.name} のノートブック: {' / '.join(hits)}"
                         "（tools/wire_config.py で直せます）")

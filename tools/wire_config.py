@@ -61,6 +61,39 @@ RULES = [
 ]
 
 
+def _fix_loss(src):
+    """損失まわりを直す。戻り値は (新しい中身, 直した内容)。
+
+    実損失は build_loss(CONDITION) で config から来ているが、使われない
+    FocalTverskyLoss のクラス定義が残っており、しかもその既定値（alpha=0.8,
+    beta=0.2）が config（0.7 / 0.3）と違う。読むと直書きに見えるので消す。
+
+    あわせて NEEDS_WEIGHT を受け取るだけで使っていないのを塞ぐ。
+    config を箇所正規化損失に変えると重みマップが要るが、このノートブックは
+    渡さないので、黙って違う損失で学習してしまう。
+    """
+    done = []
+    m = re.search(r"\nclass FocalTverskyLoss\(nn\.Module\):.*?\n(?=criterion,)",
+                  src, re.S)
+    if m and "= FocalTverskyLoss(" not in src:
+        src = src[:m.start()] + "\n" + src[m.end():]
+        done.append("未使用の FocalTverskyLoss を削除")
+
+    old = "criterion, NEEDS_WEIGHT = build_loss(CONDITION)  # 損失は config.yaml の train.loss で決まる"
+    if old not in src:
+        old = "criterion, NEEDS_WEIGHT = build_loss(CONDITION)"
+    if old in src and "NEEDS_WEIGHT を渡していません" not in src:
+        src = src.replace(old, "criterion, NEEDS_WEIGHT = build_loss(CONDITION)"
+                          "  # 損失は config.yaml の train.loss で決まる" + """
+# このノートブックは重みマップを渡さない。config を箇所正規化損失に変えた場合、
+# 黙って違う損失で学習してしまうので止める（オーバーラップ学習では窓をずらすため
+# 重みマップも一緒に切り出す必要があり、まだ対応していない）
+assert not NEEDS_WEIGHT, (
+    "この損失は重みマップが必要ですが、このノートブックは NEEDS_WEIGHT を渡していません")""")
+        done.append("NEEDS_WEIGHT の未使用を塞ぐ")
+    return src, done
+
+
 def _is_train_split(line):
     """学習の分割セルか（評価セルの train_test_split は触らない）。"""
     return "dataset2" in line or "idx_all" in line or "idx_trainval" in line
@@ -113,6 +146,15 @@ def wire(cond_dir, check_only=False):
                 else:
                     new = re.sub(r"batch_size=32", "batch_size=CFG.batch_size", new)
                     changes.append(f"c{ci} batch_size")
+        # 損失まわり（未使用クラスの削除と NEEDS_WEIGHT の塞ぎ）
+        if "build_loss(CONDITION)" in new or "class FocalTverskyLoss" in new:
+            fixed, done = _fix_loss(new)
+            if done:
+                if check_only:
+                    remaining += [f"c{ci} {d}" for d in done]
+                else:
+                    new = fixed
+                    changes += [f"c{ci} {d}" for d in done]
         if new != src and not check_only:
             c["source"] = new.splitlines(keepends=True)
 
