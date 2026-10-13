@@ -1,0 +1,35 @@
+{
+ "arch": "MultiEncoderUNet",
+ "augment": false,
+ "best_epoch": 150,
+ "best_val_f1": 0.6933,
+ "bg_ratio": 0.0,
+ "condition": "FinalFusion_DEM_APM_OverlapTrain",
+ "dataset": {
+  "Hiroshima": "hiroshima_dem_apm_normalized.pkl",
+  "Shimane": "shimane_dem_apm_normalized.pkl"
+ },
+ "epochs_run": 250,
+ "machine": "lab-windows",
+ "note": "results/curves の学習曲線から復元した run 情報",
+ "recorded_at": "2026-10-13T16:41:43",
+ "run_id": "FinalFusion_DEM_APM_OverlapTrain__lab-windows__20261013-164143",
+ "train": {
+  "augment_params": null,
+  "batch_size": 32,
+  "early_stop_patience": 100,
+  "epochs": 1000,
+  "loss": {
+   "alpha": 0.7,
+   "beta": 0.3,
+   "gamma": 0.75,
+   "type": "focal_tversky"
+  },
+  "lr": 0.0001,
+  "model_selection": "検証データのF値が最良のエポック",
+  "seed": 42,
+  "split": "6:2:2 (train_test_split test_size=0.2 -> 0.25, random_state=42)"
+ },
+ "trained_at": "20261013-164143",
+ "weights_sha256": null
+}

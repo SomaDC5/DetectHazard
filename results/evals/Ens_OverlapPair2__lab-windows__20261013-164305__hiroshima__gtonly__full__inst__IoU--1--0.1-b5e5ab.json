@@ -1,0 +1,18 @@
+{
+ "condition": "Ens_OverlapPair2",
+ "eval_id": "Ens_OverlapPair2__lab-windows__20261013-164305__hiroshima__gtonly__full__inst__IoU--1--0.1-b5e5ab",
+ "evaluated_at": "2026-10-13T16:43:05",
+ "f1": 0.6251,
+ "machine": "lab-windows",
+ "metric_kind": "箇所",
+ "n_gt_instances": 8977,
+ "n_pred_instances": 10312,
+ "note": "連結性8近傍 / 最小サイズ10px / アンサンブル",
+ "precision": 0.5646,
+ "recall": 0.7001,
+ "region": "hiroshima",
+ "run_id": "Ens_OverlapPair2__lab-windows__20261013-164305",
+ "scope": "通常",
+ "setting": "IoU多対1 (0.1)",
+ "tileset": "警戒のみ"
+}
