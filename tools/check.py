@@ -27,6 +27,47 @@ _HARDCODE = [
     # 既定値（alpha=0.8/beta=0.2）が config（0.7/0.3）と違うので直書きに見える
     (r"class FocalTverskyLoss", "未使用の損失クラスが残っている（読むと直書きに見える）"),
 ]
+def _dc5lib_exports():
+    """dc5lib が公開している 名前 -> それを持つモジュールの集合。
+
+    describe や get のように複数のモジュールにある名前があるので、
+    どれか1つから import していれば良しとする。
+    """
+    import importlib, inspect, pkgutil
+    import dc5lib
+    owner = {}
+    for m in pkgutil.iter_modules(dc5lib.__path__):
+        try:
+            mod = importlib.import_module(f"dc5lib.{m.name}")
+        except Exception:
+            continue
+        for n, v in vars(mod).items():
+            if n.startswith("_") or not (inspect.isfunction(v) or inspect.isclass(v)):
+                continue
+            if getattr(v, "__module__", "").startswith("dc5lib"):
+                owner.setdefault(n, set()).add(f"dc5lib.{m.name}")
+    return owner
+
+
+_EXPORTS = _dc5lib_exports()
+
+
+def _missing_imports(src):
+    """呼び出しているのに import も定義もしていない dc5lib の名前。"""
+    out = []
+    for name, mods in _EXPORTS.items():
+        if not re.search(rf"(?<![\w.]){re.escape(name)}\s*\(", src):
+            continue
+        if re.search(rf"^\s*(def|class)\s+{re.escape(name)}\b", src, re.M):
+            continue
+        ok = any(re.search(rf"^\s*(from\s+{re.escape(m)}\s+import[^\n]*"
+                           rf"(?<![\w]){re.escape(name)}(?![\w])|import\s+{re.escape(m)})",
+                           src, re.M) for m in mods)
+        if not ok:
+            out.append(name)
+    return out
+
+
 _TRAINED = {p.parent.name for p in (paths.results_dir() / "curves").glob("*.csv")}
 for d in sorted(Path(paths.experiments_dir()).iterdir()):
     nb = d / "Keisya_airPhoto_final6.ipynb"
@@ -40,15 +81,9 @@ for d in sorted(Path(paths.experiments_dir()).iterdir()):
     hits = [msg for pat, msg in _HARDCODE if re.search(pat, src, re.M)]
     if "train_cfg(CONDITION)" not in src:
         hits.append("config を読んでいない（dc5lib.traincfg を使う）")
-    # 使っているのに import していない名前（セルを順に実行すると NameError）
-    for use, imp, name in (
-            (r"\bget\(CONDITION\)", r"from dc5lib\.registry import[^\n]*\bget\b", "get"),
-            (r"\btrain_cfg\(", r"from dc5lib\.traincfg import[^\n]*\btrain_cfg\b", "train_cfg"),
-            (r"\baux_lambda\(", r"from dc5lib\.losses import[^\n]*\baux_lambda\b", "aux_lambda"),
-            (r"\bOverlapDataset\(", r"from dc5lib\.overlap import[^\n]*\bOverlapDataset\b",
-             "OverlapDataset")):
-        if re.search(use, src) and not re.search(imp, src):
-            hits.append(f"{name} を import していない")
+    # 使っているのに import していない dc5lib の名前（順に実行すると NameError）
+    for name in sorted(_missing_imports(src)):
+        hits.append(f"{name} を import していない")
     # NEEDS_WEIGHT を受け取るだけで使っていない。config を箇所正規化損失に
     # 変えたとき、重みマップを渡さないまま黙って別の損失で学習してしまう
     if "NEEDS_WEIGHT" in src and src.count("NEEDS_WEIGHT") < 2:
