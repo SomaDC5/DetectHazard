@@ -52,6 +52,12 @@ RULES = [
      "EARLY_STOP_PATIENCE = CFG.early_stop_patience"),
     ("学習率", r"lr=1e-4", "lr=CFG.lr"),
     ("乱数種", r"random\.seed\(\d+\)", "random.seed(CFG.seed)"),
+    # モデルのクラス名の直書き。config の arch を変えても効かなくなる。
+    # 「サンプルの使用例」ブロックの中（インデントあり）は触らない
+    ("モデル", r"^model\s*=\s*\w+\(\s*\n?\s*out_channels=1,?\s*\n?\s*\)",
+     "model = build_model(get(CONDITION).arch)"),
+    ("モデル", r"^model\s*=\s*\w+\(out_channels=1\)$",
+     "model = build_model(get(CONDITION).arch)"),
 ]
 
 
@@ -120,6 +126,8 @@ def main():
     ap.add_argument("conditions", nargs="*")
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--check", action="store_true", help="直すのではなく残りを表示")
+    ap.add_argument("--include-trained", action="store_true",
+                    help="学習済みの条件も対象にする（既定は飛ばす）")
     args = ap.parse_args()
 
     root = paths.experiments_dir()
@@ -128,13 +136,21 @@ def main():
         names = sorted(d.name for d in Path(root).iterdir()
                        if (d / NB).exists())
 
+    # 学習済みは当時の記録なので既定では触らない
+    trained = {p.stem for p in (paths.results_dir() / "curves").glob("*.csv")}
     for n in names:
+        if n in trained and not args.include_trained:
+            print(f"  {n}: 学習済みのため飛ばす（--include-trained で対象にできます）")
+            continue
         out = wire(os.path.join(str(root), n), check_only=args.check)
         if out is None:
             print(f"  {n}: ノートブック無し")
         elif out:
             head = "直書きが残る" if args.check else "置き換え"
-            print(f"  {n}: {head} {len(out)} 件 — {', '.join(out[:6])}")
+            # 省略すると見落とす（学習済みを誤って書き換えたことがある）ので全部出す
+            print(f"  {n}: {head} {len(out)} 件")
+            for o in out:
+                print(f"      - {o}")
         else:
             print(f"  {n}: OK")
 

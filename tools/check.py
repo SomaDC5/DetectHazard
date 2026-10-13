@@ -22,6 +22,7 @@ _HARDCODE = [
     (r"^num_epochs\s*=\s*\d+", "エポック数が直書き"),
     (r"^EARLY_STOP_PATIENCE\s*=\s*\d+", "早期終了が直書き"),
     (r"lr=1e-4", "学習率が直書き"),
+    (r"^model\s*=\s*\w+\(\s*out_channels=1", "モデルのクラス名が直書き"),
 ]
 _TRAINED = {p.parent.name for p in (paths.results_dir() / "curves").glob("*.csv")}
 for d in sorted(Path(paths.experiments_dir()).iterdir()):
