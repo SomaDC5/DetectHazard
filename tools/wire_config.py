@@ -94,6 +94,52 @@ assert not NEEDS_WEIGHT, (
     return src, done
 
 
+def _add_early_stop(src):
+    """学習ループに早期終了が無ければ足す。戻り値は (新しい中身, 直した内容)。
+
+    config に early_stop_patience があってもノートブック側にコードが無いと
+    epochs の上限まで回り切る。`FinalFusion_SAM_APM_OverlapTrain` がこれで
+    検証F値 ep115 頭打ちのまま1000エポック回った。
+    ひな形は `FinalFusion_SAM_APM_FullSkipSup`（本人が指定した参考実装）。
+    """
+    if "EARLY_STOP_PATIENCE" in src:
+        return src, []
+
+    init_old = "best_f1_score = 0.0\n\nif os.path.exists(save_path):"
+    save_old = ('        print(f"Best model saved at epoch {epoch+1} '
+                'with Validation F1-score: {val_f1:.4f}")\n')
+    if init_old not in src or save_old not in src:
+        return src, []
+
+    # break を置く場所。ループ末尾の print より後、del より前
+    tail_anchor = '        print(f"Epoch [{epoch+1}/{num_epochs}] val f1: {val_f1:.4f}")\n'
+    if tail_anchor not in src:
+        return src, []
+
+    init_new = '''best_f1_score = 0.0
+epochs_since_best = 0                        # 早期終了用
+
+# 早期終了（検証F値が最良のエポックからこれだけ更新されなければ打ち切り）。
+# 0 なら無効。直書きせず config.yaml の train.early_stop_patience から読む
+EARLY_STOP_PATIENCE = CFG.early_stop_patience
+print("早期終了:", f"{EARLY_STOP_PATIENCE} エポック" if EARLY_STOP_PATIENCE else "なし")
+
+if os.path.exists(save_path):'''
+    src = src.replace(init_old, init_new)
+    src = src.replace(save_old, save_old + "        epochs_since_best = 0\n"
+                                "    else:\n"
+                                "        epochs_since_best += 1\n")
+    tail_new = tail_anchor + '''
+    # 早期終了: 検証F値が一定期間更新されなければ打ち切る
+    if EARLY_STOP_PATIENCE and epochs_since_best >= EARLY_STOP_PATIENCE:
+        print(f"\\n検証F値が {epochs_since_best} エポック更新されていないので打ち切ります"
+              f"（最良 {best_f1_score:.4f}）。epoch {epoch+1}/{num_epochs}")
+        break
+'''
+    src = src.replace(tail_anchor, tail_new)
+    return src, ["早期終了を学習ループに追加"]
+
+
 def _is_train_split(line):
     """学習の分割セルか（評価セルの train_test_split は触らない）。"""
     return "dataset2" in line or "idx_all" in line or "idx_trainval" in line
@@ -149,6 +195,15 @@ def wire(cond_dir, check_only=False):
         # 損失まわり（未使用クラスの削除と NEEDS_WEIGHT の塞ぎ）
         if "build_loss(CONDITION)" in new or "class FocalTverskyLoss" in new:
             fixed, done = _fix_loss(new)
+            if done:
+                if check_only:
+                    remaining += [f"c{ci} {d}" for d in done]
+                else:
+                    new = fixed
+                    changes += [f"c{ci} {d}" for d in done]
+        # 学習ループに早期終了が無ければ足す
+        if "num_epochs" in new and "best_f1_score = 0.0" in new:
+            fixed, done = _add_early_stop(new)
             if done:
                 if check_only:
                     remaining += [f"c{ci} {d}" for d in done]
