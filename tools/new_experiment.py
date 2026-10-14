@@ -215,6 +215,7 @@ TEMPLATE = {
     "augment": False, "bg_ratio": 0.0, "status": "active", "label": "", "note": "",
     "dataset": {"Hiroshima": "hiroshima_sam_apm.pkl", "Shimane": "shimane_sam_apm.pkl"},
     "train": {"epochs": 1000, "batch_size": 32, "lr": 1.0e-4, "seed": 42,
+              "early_stop_patience": 100,
               "loss": {"type": "focal_tversky", "alpha": 0.7, "beta": 0.3, "gamma": 0.75},
               "augment_params": None},
 }
@@ -324,6 +325,10 @@ def main():
 
     # 損失の指定
     train = cfg.setdefault("train", {})
+    # --from で古い条件を複製すると早期終了の項目ごと欠ける。
+    # 欠けていると config を見ても効かず、伸びなくなっても回り続ける
+    # （FinalFusion_SAM_APM_OverlapTrain で実際に 1000 エポック回った）。
+    train.setdefault("early_stop_patience", 100)
     if a.epochs is not None:
         train["epochs"] = a.epochs
     if a.seed is not None:

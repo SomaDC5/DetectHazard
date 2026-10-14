@@ -1,0 +1,17 @@
+{
+ "condition": "Ens_OverlapMix6",
+ "eval_id": "Ens_OverlapMix6__lab-windows__20261013-164525__hiroshima__gtonly__center__area",
+ "evaluated_at": "2026-10-13T16:45:25",
+ "f1": 0.734455,
+ "machine": "lab-windows",
+ "metric_kind": "面積",
+ "n_tiles": 2964,
+ "note": "アンサンブル（アンサンブル 既存4種 + オーバーラップ学習2種）。ensembles.yaml / run_ensemble_eval.py",
+ "precision": 0.70216,
+ "recall": 0.769864,
+ "region": "hiroshima",
+ "run_id": "Ens_OverlapMix6__lab-windows__20261013-164525",
+ "scope": "境界",
+ "setting": "",
+ "tileset": "警戒のみ"
+}

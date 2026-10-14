@@ -1,0 +1,17 @@
+{
+ "condition": "FinalFusion_DEM_APM_OverlapTrain",
+ "eval_id": "FinalFusion_DEM_APM_OverlapTrain__lab-windows__20261013-163617__hiroshima__gtonly__x-99fb8f__area",
+ "evaluated_at": "2026-10-13T16:36:17",
+ "f1": 0.7143,
+ "machine": "lab-windows",
+ "metric_kind": "面積",
+ "n_tiles": 2964,
+ "note": "run_overlap_eval.py。3x3近傍の9窓・中心重みつき平均",
+ "precision": 0.677,
+ "recall": 0.7559,
+ "region": "hiroshima",
+ "run_id": "FinalFusion_DEM_APM_OverlapTrain__lab-windows__20261013-163617",
+ "scope": "オーバーラップ",
+ "setting": "",
+ "tileset": "警戒のみ"
+}

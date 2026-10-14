@@ -6,13 +6,91 @@
   - 重みがリポジトリ内に紛れ込んでいないか
   - metrics.csv が evals/ と食い違っていないか
   - ensembles.yaml のメンバーが実在し、bg_ratio が揃っているか
+  - 学習ノートブックが config.yaml を無視して直書きしていないか
 """
-import subprocess, sys
+import json, re, subprocess, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from dc5lib import registry, results, paths, ensembles  # noqa: E402
 
 problems = registry.check() + ensembles.check()
+
+# 学習ノートブックの直書き。config を変えても効かないまま学習してしまうため
+# （FinalFusion_SAM_APM_OverlapTrain で早期終了が効かず 1000 エポック回った）。
+# すでに学習を終えた条件は、当時の記録として残すので対象外にする。
+_HARDCODE = [
+    (r"^num_epochs\s*=\s*\d+", "エポック数が直書き"),
+    (r"^EARLY_STOP_PATIENCE\s*=\s*\d+", "早期終了が直書き"),
+    (r"lr=1e-4", "学習率が直書き"),
+    (r"^model\s*=\s*\w+\(\s*out_channels=1", "モデルのクラス名が直書き"),
+    # 実損失は build_loss から来るが、使われないクラス定義が残っていると
+    # 既定値（alpha=0.8/beta=0.2）が config（0.7/0.3）と違うので直書きに見える
+    (r"class FocalTverskyLoss", "未使用の損失クラスが残っている（読むと直書きに見える）"),
+]
+def _dc5lib_exports():
+    """dc5lib が公開している 名前 -> それを持つモジュールの集合。
+
+    describe や get のように複数のモジュールにある名前があるので、
+    どれか1つから import していれば良しとする。
+    """
+    import importlib, inspect, pkgutil
+    import dc5lib
+    owner = {}
+    for m in pkgutil.iter_modules(dc5lib.__path__):
+        try:
+            mod = importlib.import_module(f"dc5lib.{m.name}")
+        except Exception:
+            continue
+        for n, v in vars(mod).items():
+            if n.startswith("_") or not (inspect.isfunction(v) or inspect.isclass(v)):
+                continue
+            if getattr(v, "__module__", "").startswith("dc5lib"):
+                owner.setdefault(n, set()).add(f"dc5lib.{m.name}")
+    return owner
+
+
+_EXPORTS = _dc5lib_exports()
+
+
+def _missing_imports(src):
+    """呼び出しているのに import も定義もしていない dc5lib の名前。"""
+    out = []
+    for name, mods in _EXPORTS.items():
+        if not re.search(rf"(?<![\w.]){re.escape(name)}\s*\(", src):
+            continue
+        if re.search(rf"^\s*(def|class)\s+{re.escape(name)}\b", src, re.M):
+            continue
+        ok = any(re.search(rf"^\s*(from\s+{re.escape(m)}\s+import[^\n]*"
+                           rf"(?<![\w]){re.escape(name)}(?![\w])|import\s+{re.escape(m)})",
+                           src, re.M) for m in mods)
+        if not ok:
+            out.append(name)
+    return out
+
+
+_TRAINED = {p.parent.name for p in (paths.results_dir() / "curves").glob("*.csv")}
+for d in sorted(Path(paths.experiments_dir()).iterdir()):
+    nb = d / "Keisya_airPhoto_final6.ipynb"
+    if not nb.exists() or (paths.results_dir() / "curves" / f"{d.name}.csv").exists():
+        continue        # 未作成、または学習済み（当時の記録として触らない）
+    try:
+        cells = json.load(open(nb, encoding="utf-8"))["cells"]
+    except Exception:
+        continue
+    src = "\n".join("".join(c["source"]) for c in cells if c.get("cell_type") == "code")
+    hits = [msg for pat, msg in _HARDCODE if re.search(pat, src, re.M)]
+    if "train_cfg(CONDITION)" not in src:
+        hits.append("config を読んでいない（dc5lib.traincfg を使う）")
+    # 使っているのに import していない dc5lib の名前（順に実行すると NameError）
+    for name in sorted(_missing_imports(src)):
+        hits.append(f"{name} を import していない")
+    # NEEDS_WEIGHT を受け取るだけで使っていない。config を箇所正規化損失に
+    # 変えたとき、重みマップを渡さないまま黙って別の損失で学習してしまう
+    if "NEEDS_WEIGHT" in src and src.count("NEEDS_WEIGHT") < 2:
+        hits.append("NEEDS_WEIGHT を受け取るだけで使っていない")
+    if hits:
+        problems.append(f"{d.name} のノートブック: {' / '.join(hits)}"
+                        "（tools/wire_config.py で直せます）")
 
 # metrics.csv が最新か
 csv_path = paths.results_dir() / "metrics.csv"

@@ -103,3 +103,31 @@ ensembles:
 #    status: excluded
 #    rule: median
 #    members: [...]
+
+  # --- オーバーラップ学習どうし ----------------------------------------
+  Ens_OverlapPair2:
+    label: アンサンブル オーバーラップ学習2種
+    note: >
+      オーバーラップ学習した SAM+APM と DEM+APM。入力の多様性（相関が最も低いのは
+      DEM系 対 SAM系）と、オーバーラップ学習の再現率を掛け合わせる狙い。
+      アンサンブルは適合率を買い（+0.083）、オーバーラップ学習は再現率を買う（+0.084）
+      ので、逆向きの性質を併用する。docs/展望_再現率をどう上げるか.md 8.6
+    members:
+      - FinalFusion_SAM_APM_OverlapTrain
+      - FinalFusion_DEM_APM_OverlapTrain
+
+  Ens_OverlapMix6:
+    label: アンサンブル 既存4種 + オーバーラップ学習2種
+    note: >
+      Ens_InputDiverse4（適合率を買う）に、オーバーラップ学習2本（再現率を買う）を
+      足したもの。性質が逆向きのメンバーを混ぜる狙い。
+      オーバーラップ学習どうしだけ（Ens_OverlapPair2）は箇所F 0.6306 と
+      単体より下だった。両方とも塗り広げ方向（予測面積比 1.788 / 1.648）で
+      相殺が起きないためと見ている。
+    members:
+      - DataOgument_FinalFusion_DEM_APM
+      - AttentionUNet_DEM_APM
+      - DataOgument_FinalFusion_SAM_APM
+      - AttentionUNet_SAM_APM
+      - FinalFusion_SAM_APM_OverlapTrain
+      - FinalFusion_DEM_APM_OverlapTrain
