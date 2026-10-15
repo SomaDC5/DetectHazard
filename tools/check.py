@@ -11,9 +11,9 @@
 import json, re, subprocess, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from dc5lib import registry, results, paths, ensembles  # noqa: E402
+from dc5lib import registry, results, paths, ensembles, postprocess  # noqa: E402
 
-problems = registry.check() + ensembles.check()
+problems = registry.check() + ensembles.check() + postprocess.check()
 
 # 学習ノートブックの直書き。config を変えても効かないまま学習してしまうため
 # （FinalFusion_SAM_APM_OverlapTrain で早期終了が効かず 1000 エポック回った）。

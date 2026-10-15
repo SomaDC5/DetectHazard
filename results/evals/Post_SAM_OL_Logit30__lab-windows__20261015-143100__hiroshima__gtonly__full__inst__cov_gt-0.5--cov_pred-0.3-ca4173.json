@@ -1,0 +1,18 @@
+{
+ "condition": "Post_SAM_OL_Logit30",
+ "eval_id": "Post_SAM_OL_Logit30__lab-windows__20261015-143100__hiroshima__gtonly__full__inst__cov_gt-0.5--cov_pred-0.3-ca4173",
+ "evaluated_at": "2026-10-15T14:31:01",
+ "f1": 0.7472,
+ "machine": "lab-windows",
+ "metric_kind": "箇所",
+ "n_gt_instances": 8977,
+ "n_pred_instances": 6795,
+ "note": "連結性8近傍 / 最小サイズ10px / 後処理",
+ "precision": 0.771,
+ "recall": 0.7247,
+ "region": "hiroshima",
+ "run_id": "Post_SAM_OL_Logit30__lab-windows__20261015-143100",
+ "scope": "通常",
+ "setting": "被覆 (cov_gt=0.5, cov_pred=0.3)",
+ "tileset": "警戒のみ"
+}

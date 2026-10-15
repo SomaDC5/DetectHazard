@@ -176,16 +176,88 @@ def prune(PB, drop):
     return out
 
 
+def full_scores(GT, PB):
+    """面積（通常・境界）と箇所（全設定）。記録用。"""
+    from analysis import config as acfg
+
+    def area(p, g):
+        tp = int(np.logical_and(p, g).sum())
+        fp = int(np.logical_and(p, ~g).sum())
+        fn = int(np.logical_and(~p, g).sum())
+        d = 2 * tp + fp + fn
+        return {"recall": tp / (tp + fn) if (tp + fn) else 0.0,
+                "precision": tp / (tp + fp) if (tp + fp) else 0.0,
+                "f1": 2 * tp / d if d else 0.0}
+
+    cr = acfg.BORDER_CROP
+    rows = [instances.evaluate_tile_multi(GT[k], PB[k], SETTINGS,
+                                          connectivity=8, min_size=10)
+            for k in range(len(GT))]
+    df = pd.DataFrame(rows)
+    return (area(PB, GT),
+            area(PB[:, cr:-cr, cr:-cr], GT[:, cr:-cr, cr:-cr]),
+            {name: instances.summarize_setting(df, name) for name in SETTINGS},
+            len(GT))
+
+
+def record(pp, region, res):
+    """results/evals/ に記録する。アンサンブルと同じ扱いで condition 列に名前を入れる。"""
+    from dc5lib import results as R
+
+    a_full, a_cent, inst, n_tiles = res
+    tileset = {"hiroshima": "警戒のみ", "shimane": "全件"}[region]
+    run_id = R.new_run_id(pp.name)
+    note = (f"後処理（{pp.display()}）。base={pp.base} / 推論={pp.inference} / "
+            f"{pp.feature}<={pp.threshold:g} のかたまりを捨てる。"
+            f"ensembles.yaml の postprocess / run_overlap_prune.py")
+    n = 0
+    for scope, a in (("通常", a_full), ("境界", a_cent)):
+        R.record_eval(run_id=run_id, condition=pp.name, region=region,
+                      tileset=tileset, scope=scope, metric_kind="面積",
+                      recall=a["recall"], precision=a["precision"], f1=a["f1"],
+                      n_tiles=n_tiles, note=note)
+        n += 1
+    for setting, r in inst.items():
+        R.record_eval(run_id=run_id, condition=pp.name, region=region,
+                      tileset=tileset, scope="通常", metric_kind="箇所",
+                      setting=setting, recall=r["箇所Recall"],
+                      precision=r["箇所Precision"], f1=r["箇所F値"],
+                      n_gt_instances=r["箇所_正解数"],
+                      n_pred_instances=r["箇所_予測数"],
+                      note="連結性8近傍 / 最小サイズ10px / 後処理")
+        n += 1
+    out = R.build_metrics_csv()
+    print(f"\n記録: evals {n} 件 / metrics.csv を更新（{out}）")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--condition", default="FinalFusion_SAM_APM_OverlapTrain")
+    ap.add_argument("--postprocess", default=None,
+                    help="ensembles.yaml の postprocess の名前。これを使うと "
+                         "base・特徴量・しきい値を定義から読む")
     ap.add_argument("--region", default="hiroshima", choices=["hiroshima", "shimane"])
     ap.add_argument("--feature", default="logit_max",
                     choices=["logit_max", "logit_mean", "area"])
     ap.add_argument("--thr", type=float, default=None,
                     help="他の地域で決めたしきい値をそのまま当てる（地域をまたぐ確認）")
+    ap.add_argument("--record", action="store_true",
+                    help="results/evals/ に記録する（--postprocess が必要）")
     ap.add_argument("--device", default=None)
     args = ap.parse_args()
+
+    if args.record and not args.postprocess:
+        sys.exit("--record には --postprocess が必要です"
+                 "（名前が無いと metrics.csv の condition 列に何を入れるか決まりません）")
+
+    if args.postprocess:
+        from dc5lib import postprocess as pp_mod
+        pp = pp_mod.get(args.postprocess)
+        args.condition, args.feature, args.thr = pp.base, pp.feature, pp.threshold
+        print(f"後処理 {pp.name}: {pp.display()}")
+        if pp.inference != "オーバーラップ":
+            sys.exit(f"このプログラムはオーバーラップ推論専用です"
+                     f"（定義は inference={pp.inference}）")
 
     cond = get(args.condition)
     device = torch.device(args.device) if args.device else pick_device()
@@ -219,13 +291,19 @@ def main():
 
     if args.thr is not None:
         drop = df[df[f] <= args.thr]
-        R, P, F, nn = score(GT, prune(PB, drop))
-        print(f"\n--- 他の地域で決めたしきい値 {args.thr:.3f} をそのまま当てる ---")
+        pruned = prune(PB, drop)
+        R, P, F, nn = score(GT, pruned)
+        head = ("定義のしきい値" if args.postprocess else "他の地域で決めたしきい値")
+        print(f"\n--- {head} {args.thr:.3f} を当てる ---")
         print(f"  捨てたかたまり {len(drop)} / {len(df)}"
               f"（{100 * len(drop) / len(df):.1f}%）")
         print(f"  刈る前   箇所R {R0:.4f} / P {P0:.4f} / F {F0:.4f}")
         print(f"  刈った後 箇所R {R:.4f} / P {P:.4f} / F {F:.4f} / 予測数 {nn}")
         print(f"  正味 {F - F0:+.4f}")
+        if args.record:
+            res = full_scores(GT, pruned)
+            print(f"  面積F {res[0]['f1']:.4f}（境界 {res[1]['f1']:.4f}）")
+            record(pp, args.region, res)
         return
 
     # しきい値は別のタイルで決める

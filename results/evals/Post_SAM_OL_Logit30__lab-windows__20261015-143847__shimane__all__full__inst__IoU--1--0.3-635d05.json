@@ -1,0 +1,18 @@
+{
+ "condition": "Post_SAM_OL_Logit30",
+ "eval_id": "Post_SAM_OL_Logit30__lab-windows__20261015-143847__shimane__all__full__inst__IoU--1--0.3-635d05",
+ "evaluated_at": "2026-10-15T14:38:47",
+ "f1": 0.5066,
+ "machine": "lab-windows",
+ "metric_kind": "箇所",
+ "n_gt_instances": 27445,
+ "n_pred_instances": 23110,
+ "note": "連結性8近傍 / 最小サイズ10px / 後処理",
+ "precision": 0.5518,
+ "recall": 0.4683,
+ "region": "shimane",
+ "run_id": "Post_SAM_OL_Logit30__lab-windows__20261015-143847",
+ "scope": "通常",
+ "setting": "IoU多対1 (0.3)",
+ "tileset": "全件"
+}
