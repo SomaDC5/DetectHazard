@@ -1,0 +1,21 @@
+{
+ "condition": "FinalFusion_SAM_APM_FTa50",
+ "eval_id": "FinalFusion_SAM_APM_FTa50__HirokaneZemi01__20261014-170200__shimane__all__center__area",
+ "evaluated_at": "2026-10-15T12:34:10",
+ "f1": 0.5516,
+ "fn": 3936552,
+ "fp": 2997298,
+ "machine": "HirokaneZemi01",
+ "metric_kind": "面積",
+ "n_tiles": 24569.0,
+ "note": "tileanalysis による再推論。ノートブック出力と F値 0.0001 以内で一致",
+ "precision": 0.5873,
+ "recall": 0.52,
+ "region": "shimane",
+ "run_id": "FinalFusion_SAM_APM_FTa50__HirokaneZemi01__20261014-170200",
+ "scope": "境界",
+ "setting": "",
+ "tileset": "全件",
+ "tp": 4264983,
+ "weights_sha256": "2696fa7d08d7cc0440b2ff3fb8c1113352a018cdeb14480c9742679294ccd1ed"
+}
