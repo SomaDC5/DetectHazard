@@ -169,3 +169,20 @@ postprocess:
     feature: logit_max
     threshold: 29.150
     drop_quantile: 0.30
+
+  Post_SAM_OL_Stage2:
+    label: SAM+APM OL学習 + OL推論 + 2段目CNN
+    note: >
+      展望_再現率をどう上げるか.md 14。WNet の2段目を実装したもの。
+      1段目は凍結し、かたまり周辺 64x64 を 3x3 モザイクから切り出して
+      6ch（傾斜角・写真RGB・混ぜたロジット・対象のかたまりのマスク）と
+      スカラー5つを小さい CNN（0.30M）に入れ、残す確率を出す。
+      学習は検証split のかたまり 9,880個（1段目が重みの更新に使っていないタイル）。
+      しきい値 0.45 は検証split で箇所F が最良になる値として選び、テストで測った。
+      実測 広島 箇所F 0.7535（しきい値1本の 0.7474 を +0.0061 上回る）。
+      学習・評価は analysis/run_stage2_train.py と run_stage2_eval.py。
+    base: FinalFusion_SAM_APM_OverlapTrain
+    inference: オーバーラップ
+    feature: stage2
+    model: Stage2_SAM_OL_v1
+    threshold: 0.45

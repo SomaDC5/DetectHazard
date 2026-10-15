@@ -41,6 +41,8 @@ FEATURES = {
     "logit_max":  "かたまり内のロジットの最大値。実測で一番分離が良い（AUC 0.8006）",
     "logit_mean": "かたまり内のロジットの平均（AUC 0.7919）",
     "area":       "かたまりの画素数（AUC 0.7692）。ロジットより弱い",
+    "stage2":     "学習した2段目の出す「残す確率」。threshold は 0〜1 で、"
+                  "model に重みの名前が要る",
 }
 INFERENCES = {
     "通常": "タイルをそのまま1枚ずつ推論する",
@@ -56,6 +58,7 @@ class PostProcess:
     feature: str = "logit_max"
     inference: str = "オーバーラップ"
     drop_quantile: float | None = None
+    model: str | None = None          # feature="stage2" のときの重みの名前
     label: str = ""
     note: str = ""
     status: str = "active"
@@ -77,7 +80,7 @@ def all_postprocess(include_excluded=False):
             d = yaml.safe_load(CONFIG.read_text(encoding="utf-8")) or {}
             _cache = []
             known = {"base", "threshold", "feature", "inference",
-                     "drop_quantile", "label", "note", "status"}
+                     "drop_quantile", "label", "note", "status", "model"}
             for name, v in (d.get("postprocess") or {}).items():
                 v = dict(v or {})
                 extra = {k: v.pop(k) for k in list(v) if k not in known}
@@ -128,6 +131,17 @@ def check():
         if p.feature.startswith("logit") and p.threshold is not None and p.threshold <= 0:
             problems.append(f"後処理 '{p.name}': threshold {p.threshold} はロジットとして"
                             f"小さすぎます（0以下だと二値化の境目より下で、何も刈りません）")
+        if p.feature == "stage2":
+            if not p.model:
+                problems.append(f"後処理 '{p.name}': feature=stage2 には model（2段目の"
+                                f"重みの名前）が必要です")
+            elif not paths.weights_path(p.model).exists():
+                problems.append(f"後処理 '{p.name}': 2段目の重みがありません "
+                                f"({paths.weights_path(p.model)})")
+            if p.threshold is not None and not (0.0 < p.threshold < 1.0):
+                problems.append(f"後処理 '{p.name}': feature=stage2 の threshold は"
+                                f"「残す確率」なので 0〜1 の間にしてください"
+                                f"（いま {p.threshold}）")
         lab = p.display()
         if lab in seen_labels:
             problems.append(f"後処理 '{p.name}': 表示ラベル '{lab}' が "
@@ -147,6 +161,8 @@ if __name__ == "__main__":
         print(f"  base       {p.base}")
         print(f"  推論       {p.inference}（{INFERENCES[p.inference]}）")
         print(f"  特徴量     {p.feature}（{FEATURES.get(p.feature, '?')}）")
+        if p.model:
+            print(f"  2段目      {p.model}")
         print(f"  しきい値   {p.threshold:g} 以下のかたまりを捨てる", end="")
         print(f"（選んだときは下位 {100 * p.drop_quantile:.0f}%）"
               if p.drop_quantile else "")
