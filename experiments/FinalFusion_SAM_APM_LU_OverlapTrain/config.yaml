@@ -1,0 +1,41 @@
+# 実験条件の定義。フォルダを増やせば条件が増える。
+# 重みは dc5-data/weights/<name>/ にあり、ここには置かない。
+name: FinalFusion_SAM_APM_LU_OverlapTrain
+arch: TripleEncoderUNet
+family: Final
+inputs:
+- key: terrain
+  source: SAM
+  channels: 1
+  field: DEM
+- key: airphoto
+  source: APM
+  channels: 3
+  field: AirPhoto
+- key: landuse
+  source: LU
+  channels: 9
+  field: LandUse
+augment: false
+bg_ratio: 0.0
+status: active
+label: Final SAM+APM+土地利用 オーバーラップ学習
+note: 土地利用を3入力目に足したオーバーラップ学習。失敗の所在.md 197行（TP=0 の60%は正解の方が緩斜面＝指定基準が保全対象の有無を含むため地形だけでは解けない）への手当て。土地利用は
+  L03-b 平成28年・世界測地系の100mメッシュ9区分。展望_再現率をどう上げるか.md 14.4
+dataset:
+  Hiroshima: hiroshima_sam_apm_lu.pkl
+  Shimane: shimane_sam_apm_lu.pkl
+train:
+  epochs: 1000
+  batch_size: 32
+  lr: 0.0001
+  seed: 42
+  early_stop_patience: 100
+  split: 6:2:2 (train_test_split test_size=0.2 -> 0.25, random_state=42)
+  model_selection: 検証データのF値が最良のエポック
+  loss:
+    type: focal_tversky
+    alpha: 0.7
+    beta: 0.3
+    gamma: 0.75
+  augment_params: null

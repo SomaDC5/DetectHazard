@@ -1420,9 +1420,91 @@ class HiResAirMultiEncoderUNet(MultiEncoderUNet):
         return super().forward(dem, self.air_in(air))
 
 
+# ============================================================
+# 3入力（傾斜角 + 航空写真 + 土地利用）
+# ============================================================
+class TripleEncoderUNet(nn.Module):
+    """MultiEncoderUNet にエンコーダを1本足した版。
+
+    なぜ作るのか（失敗の所在.md 197行 / 展望_再現率をどう上げるか.md 14.4）
+    ----------------------------------------------------------------------
+    TP=0 のタイルの 60% は「正解領域のほうが周囲より緩斜面」で、
+    **急傾斜地崩壊危険区域の指定基準が保全対象（人家）の有無を含む**ため、
+    地形と写真だけでは原理的に当てられない。土地利用を3本目の入力にする。
+
+    実測で、危険区域タイルは背景より建物用地が 8.13ポイント多く（広島）、
+    森林が 24.82ポイント少ない。
+
+    モジュール名は既存の `Triple_UNet_SAM_APM_GEO` の重みと同じ
+    （slope_enc / curv_enc / geo_enc）にしてあるが、
+    **あの重みはこのクラスでは読めない。** あちらは bottleneck が
+    1536→1536 で、こちらは 1536→**1024**（デコーダを MultiEncoderUNet と
+    同じ形に保つため）。読めるようにするには bottleneck を 1536→1536 にして
+    up4 を 1536→512 にする必要があり、bottleneck だけで +42M になる。
+    いまの形は 56.13M（2入力版は 43.58M）。
+
+    融合のしかたは MultiEncoderUNet と同じ（bottleneck で連結、
+    スキップは3本すべてをデコーダに渡す）。
+    """
+
+    def __init__(self, out_channels=1, third_channels=9):
+        super().__init__()
+        self.third_channels = third_channels
+
+        for pre, ch in (("slope", 1), ("curv", 3), ("geo", third_channels)):
+            setattr(self, f"{pre}_enc1", self.conv_block(ch, 64))
+            setattr(self, f"{pre}_pool1", nn.MaxPool2d(2))
+            setattr(self, f"{pre}_enc2", self.conv_block(64, 128))
+            setattr(self, f"{pre}_pool2", nn.MaxPool2d(2))
+            setattr(self, f"{pre}_enc3", self.conv_block(128, 256))
+            setattr(self, f"{pre}_pool3", nn.MaxPool2d(2))
+            setattr(self, f"{pre}_enc4", self.conv_block(256, 512))
+            setattr(self, f"{pre}_pool4", nn.MaxPool2d(2))
+        self.dropout2 = nn.Dropout(0.25)
+
+        self.bottleneck = self.conv_block(512 * 3, 1024)
+        self.dropout = nn.Dropout(0.5)
+
+        self.up4 = nn.ConvTranspose2d(1024, 512, kernel_size=2, stride=2)
+        self.dec4 = self.conv_block(512 + 512 * 3, 512)
+        self.up3 = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2)
+        self.dec3 = self.conv_block(256 + 256 * 3, 256)
+        self.up2 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
+        self.dec2 = self.conv_block(128 + 128 * 3, 128)
+        self.up1 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
+        self.dec1 = self.conv_block(64 + 64 * 3, 64)
+
+        self.out_conv = nn.Conv2d(64, out_channels, kernel_size=1)
+
+    conv_block = MultiEncoderUNet.conv_block
+
+    def _encode(self, pre, x):
+        e1 = getattr(self, f"{pre}_enc1")(x)
+        e2 = getattr(self, f"{pre}_enc2")(getattr(self, f"{pre}_pool1")(e1))
+        e3 = getattr(self, f"{pre}_enc3")(getattr(self, f"{pre}_pool2")(e2))
+        e4 = getattr(self, f"{pre}_enc4")(getattr(self, f"{pre}_pool3")(e3))
+        return e1, e2, e3, self.dropout2(e4)
+
+    def forward(self, dem, air, extra):
+        s1, s2, s3, s4 = self._encode("slope", dem)
+        c1, c2, c3, c4 = self._encode("curv", air)
+        g1, g2, g3, g4 = self._encode("geo", extra)
+
+        fused = torch.cat([self.slope_pool4(s4), self.curv_pool4(c4),
+                           self.geo_pool4(g4)], dim=1)
+        b = self.dropout(self.bottleneck(fused))
+
+        d4 = self.dec4(torch.cat([self.up4(b), s4, c4, g4], dim=1))
+        d3 = self.dec3(torch.cat([self.up3(d4), s3, c3, g3], dim=1))
+        d2 = self.dec2(torch.cat([self.up2(d3), s2, c2, g2], dim=1))
+        d1 = self.dec1(torch.cat([self.up1(d2), s1, c1, g1], dim=1))
+        return self.out_conv(d1)
+
+
 MODEL_CLASSES = {
     "UNet": UNet,
     "MultiEncoderUNet": MultiEncoderUNet,
+    "TripleEncoderUNet": TripleEncoderUNet,
     "EarlyFusionUNet": EarlyFusionUNet,
     "MiddleFusionUNet": MiddleFusionUNet,
     "AttentionMultiEncoderUNet": AttentionMultiEncoderUNet,
