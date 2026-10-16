@@ -47,6 +47,7 @@ from analysis import config
 from analysis.data import load_pkl
 from analysis.run_overlap_eval import (OFFSETS, cos_window, grid_index,  # noqa: E402
                                        mosaic, prep_mask)
+from dc5lib import landuse as _landuse  # noqa: E402
 from dc5lib import paths, stage2                                        # noqa: E402
 from dc5lib.device import pick_device                                   # noqa: E402
 from dc5lib.instance_eval import label_instances, overlap_matrix        # noqa: E402
@@ -94,16 +95,21 @@ def build(cond, split, device, batch_hint=500):
     C, S, Y, T, B = [], [], [], [], []
     t0 = time.time()
     for n, k in enumerate(tiles):
-        D, A, _ = mosaic(ds, cell, gi, gj, k)
-        dems, airs = [], []
+        D, A, _, LU = mosaic(ds, cell, gi, gj, k)
+        dems, airs, lus = [], [], []
         for dy, dx in OFFSETS:
             r, c = 128 + dy, 128 + dx
             dems.append(D[r:r + 128, c:c + 128])
             airs.append(A[r:r + 128, c:c + 128])
+            if LU is not None:
+                # 地形と同じ窓で切る
+                lus.append(LU[r:r + 128, c:c + 128])
         dem = torch.from_numpy(np.stack(dems)[:, None]).float().to(device)
         air = (torch.from_numpy(np.stack(airs).transpose(0, 3, 1, 2))
                .float().to(device) / 255.0)
-        lo = model(dem, air)[:, 0]
+        extra = ([] if LU is None
+                 else [_landuse.onehot_torch(np.stack(lus), device=device)])
+        lo = model(dem, air, *extra)[:, 0]
         pr = torch.sigmoid(lo).cpu().numpy()
         lg = lo.cpu().numpy()
 

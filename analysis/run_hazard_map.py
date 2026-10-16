@@ -93,7 +93,7 @@ def predict_region(cond, region, overlap, device, verbose=True):
 
     for k in range(n):
         if overlap:
-            D, A, _ = mosaic(ds, cell, gi, gj, k)
+            D, A, _, LU = mosaic(ds, cell, gi, gj, k)
             # **航空写真は条件によって解像度が違う**（*_sam_apm256.pkl は 256px）。
             # 地形量で 64px ずらす窓は、航空写真では ap/128 倍ずらす必要がある。
             # 倍率を掛けないと別の場所を切り出す。

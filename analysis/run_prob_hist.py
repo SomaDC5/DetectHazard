@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from analysis import config, data as adata                       # noqa: E402
 from analysis.run_ensemble_eval import _region_dir, predict      # noqa: E402
+from dc5lib import inputs as minputs  # noqa: E402
 from dc5lib.device import pick_device                            # noqa: E402
 from dc5lib.registry import get                                  # noqa: E402
 
@@ -84,7 +85,9 @@ def main():
         print(f"\n読み込み: {os.path.basename(pkl)}")
         tiles = adata.build_tileset(pkl, args.region,
                                     any(c.use_airphoto for c in group),
-                                    group[0].bg_ratio, verbose=False)
+                                    group[0].bg_ratio, verbose=False,
+                                    need_landuse=any(minputs.needs_landuse(c)
+                                                     for c in group))
         no = list(tiles.no)
         g = (tiles.mask[:, 0] > 0)
         if ref_no is None:

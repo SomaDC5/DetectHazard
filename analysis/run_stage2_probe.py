@@ -43,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from analysis import config, data as adata, instances                 # noqa: E402
 from analysis.run_ensemble_eval import _region_dir                    # noqa: E402
 from analysis.run_instance_eval import SETTINGS                       # noqa: E402
+from dc5lib import inputs as minputs  # noqa: E402
 from dc5lib.device import pick_device                                 # noqa: E402
 from dc5lib.instance_eval import (PRIMARY, label_instances,           # noqa: E402
                                   overlap_matrix)
@@ -65,9 +66,10 @@ def predict_logits(cond, tiles, device, batch_size=32):
             e = min(s + batch_size, len(tiles.no))
             t = torch.from_numpy(tiles.terrain[s:e]).to(device)
             if cond.use_airphoto:
-                a = (torch.from_numpy(np.ascontiguousarray(tiles.air[s:e]))
-                     .to(device).float() / 255.0)
-                logits = model(t, a)
+                logits = model(*minputs.model_args(
+                    cond, t, tiles.air[s:e],
+                    None if tiles.landuse is None else tiles.landuse[s:e],
+                    device=device))
             else:
                 logits = model(t)
             out[s:e] = logits.squeeze(1).cpu().numpy()
@@ -162,7 +164,8 @@ def main():
 
     tiles = adata.build_tileset(str(cond.pkl_for(_region_dir(args.region))),
                                 args.region, cond.use_airphoto,
-                                cond.bg_ratio, verbose=False)
+                                cond.bg_ratio, verbose=False,
+                                need_landuse=minputs.needs_landuse(cond))
     gt = (tiles.mask[:, 0] > 0)
     print(f"タイル {len(gt)} 枚")
     logit = predict_logits(cond, tiles, device, args.batch_size)

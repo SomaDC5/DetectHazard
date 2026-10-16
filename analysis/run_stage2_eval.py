@@ -35,6 +35,7 @@ from analysis.run_overlap_eval import (OFFSETS, cos_window, grid_index,  # noqa:
                                        mosaic, prep_mask)
 from analysis.run_overlap_prune import full_scores, score               # noqa: E402
 from analysis.run_stage2_train import split_indices                     # noqa: E402
+from dc5lib import landuse as _landuse  # noqa: E402
 from dc5lib import paths, stage2                                        # noqa: E402
 from dc5lib.device import pick_device                                   # noqa: E402
 from dc5lib.instance_eval import label_instances                        # noqa: E402
@@ -73,16 +74,21 @@ def run(stage1, model2, split, device, region="hiroshima"):
     PB = np.zeros_like(GT)
     rows = []
     for n, k in enumerate(tiles):
-        D, A, _ = mosaic(ds, cell, gi, gj, k)
-        dems, airs = [], []
+        D, A, _, LU = mosaic(ds, cell, gi, gj, k)
+        dems, airs, lus = [], [], []
         for dy, dx in OFFSETS:
             r, c = 128 + dy, 128 + dx
             dems.append(D[r:r + 128, c:c + 128])
             airs.append(A[r:r + 128, c:c + 128])
+            if LU is not None:
+                # 地形と同じ窓で切る
+                lus.append(LU[r:r + 128, c:c + 128])
         dem = torch.from_numpy(np.stack(dems)[:, None]).float().to(device)
         air = (torch.from_numpy(np.stack(airs).transpose(0, 3, 1, 2))
                .float().to(device) / 255.0)
-        lo = m1(dem, air)[:, 0]
+        extra = ([] if LU is None
+                 else [_landuse.onehot_torch(np.stack(lus), device=device)])
+        lo = m1(dem, air, *extra)[:, 0]
         pr = torch.sigmoid(lo).cpu().numpy()
         lg = lo.cpu().numpy()
 
