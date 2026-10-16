@@ -89,18 +89,24 @@ def fig_pipeline(out: Path):
     print("  書き出し:", out.name)
 
 
-def _pick_window(mask_path, size=1400, step=8):
+def _pick_window(pred_path, size=1400, step=8, band=2):
     """正解が多い場所を間引き読みで探す。全面を読まない。
 
-    **nodata の扱いに注意。** このラスタは 0=区域外 / 1=区域 / 255=nodata で、
-    `> 0` で判定すると nodata を区域として数えてしまう（実際に左上の
-    nodata 領域が「全画素が正解」として選ばれた）。
+    **バンドの意味に注意。** 本体の GeoTIFF は
+      バンド1 = 抽出確率 0-100 / バンド2 = 正解 0/1 / バンド3 = 学習フラグ
+    であり（build_paper.py の表VIII と GeoTIFF の DESCRIPTION が一致）、
+    別ファイルの `__mask.tif` は**二値化した予測**である
+    （DESCRIPTION は確率と書かれているが中身は 0/1 で、バンド1>50 と一致する）。
+    最初これを取り違えて、正解と予測を入れ替えた図を作った。
+
+    **nodata の扱いにも注意。** 0=区域外 / 1=区域 / 255=nodata なので、
+    `> 0` で判定すると nodata を区域として数えてしまう。
     """
     import rasterio
-    with rasterio.open(mask_path) as src:
+    with rasterio.open(pred_path) as src:
         h, w = src.height, src.width
-        small = src.read(1, out_shape=(h // step, w // step))
-        nod = src.nodatavals[0]
+        small = src.read(band, out_shape=(h // step, w // step))
+        nod = src.nodatavals[band - 1]
     nod = 255 if nod is None else int(nod)
     k = size // step
     best, pos = -1, (0, 0)
@@ -118,34 +124,40 @@ def _pick_window(mask_path, size=1400, step=8):
     return pos, best
 
 
-def fig_output(out: Path, name="Ens_AllStrong14", region="hiroshima", size=1400):
+def fig_output(out: Path, name="Ens_AllStrong14", region="shimane", size=1400):
     """予測と正解の差分を実際の地図上で見せる。GeoTIFF の窓読みだけ。"""
     import rasterio
     from rasterio.windows import Window
     from dc5lib.paths import data_root
 
     hm = data_root() / "hazard_map"
-    pred_p = hm / f"{name}__{region}.tif"
-    mask_p = hm / f"{name}__{region}__mask.tif"
-    for p in (pred_p, mask_p):
-        if not p.exists():
-            sys.exit(f"{p} がありません")
+    tif = hm / f"{name}__{region}.tif"
+    if not tif.exists():
+        sys.exit(f"{tif} がありません")
 
-    (r0, c0), npix = _pick_window(mask_p, size)
+    (r0, c0), npix = _pick_window(tif, size)
     print(f"  窓: 行 {r0} 列 {c0} / {size}x{size}（間引きで見つけた正解 {npix} 画素）")
     win = Window(c0, r0, size, size)
-    # 0=区域外 / 1=区域 / 255=nodata。**== 1 で取る**（>0 だと nodata を拾う）
-    with rasterio.open(mask_p) as src:
-        a = src.read(1, window=win)
-    with rasterio.open(pred_p) as src:
-        # バンド2が二値化した予測（docs/ハザードマップの作り方.md）。
-        # 0/1 なので >127 ではなく == 1
-        b = src.read(2, window=win)
-    valid = (a != 255) & (b != 255)
-    gt = (a == 1) & valid
-    pr = (b == 1) & valid
+    # 本体の1ファイルだけで済ませる。バンド1=確率 / バンド2=正解 / 255=nodata
+    with rasterio.open(tif) as src:
+        prob = src.read(1, window=win)
+        truth = src.read(2, window=win)
+        # バンド3 = 学習に使ったタイルか。**論文の表VIIIの警告のとおり、
+        # 広島の地図には学習済みタイルが混ざるので、そのまま性能として出せない。**
+        used = src.read(3, window=win) if src.count >= 3 else None
+    valid = (truth != 255) & (prob != 255)
+    if used is not None:
+        frac = float((used[valid] == 1).mean())
+        print(f"  学習に使ったタイルの画素 {100 * frac:.1f}%")
+        if frac > 0.01:
+            print("  ※ 学習済みタイルが混ざっています。"
+                  "論文に載せるなら島根（--region shimane）を使うこと")
+    gt = (truth == 1) & valid
+    pr = (prob > 50) & valid          # しきい値0.5
     print(f"  有効画素 {100 * valid.mean():.1f}% / 正解 {int(gt.sum()):,} / "
           f"予測 {int(pr.sum()):,}")
+    print(f"  当たり {int((gt & pr).sum()):,} / 誤検出 {int((pr & ~gt).sum()):,} / "
+          f"見逃し {int((gt & ~pr).sum()):,}")
 
     diff = np.zeros(gt.shape + (3,), np.float32) + 1.0
     for sel, col in ((gt & pr, C_TP), (pr & ~gt, C_FP), (gt & ~pr, C_FN)):
@@ -241,7 +253,8 @@ def main():
     ap.add_argument("--inputs", action="store_true",
                     help="pkl を 5.2GB 読む。学習中は避ける")
     ap.add_argument("--name", default="Ens_AllStrong14")
-    ap.add_argument("--region", default="hiroshima")
+    ap.add_argument("--region", default="shimane",
+                    help="論文用は島根。広島は学習済みタイルが混ざる")
     args = ap.parse_args()
 
     out = Path(args.out) if args.out else Path("docs/論文/figs")
