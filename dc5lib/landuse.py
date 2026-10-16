@@ -44,26 +44,43 @@ TILE = 128
 MESH_DLAT = 1.0 / 1200.0
 MESH_DLON = 1.0 / 800.0
 
-# L03-b の土地利用区分（コード -> 名前）。原典の仕様書より
+# 土地利用区分（コード -> 名前）。
+#
+# **コード表は年次ごとに違う。** GML の rangeParameters に
+#   <ksj:landuseCode gml:CodeSpace="LandUseCd-09.html" />
+# と書いてあるものが正。下は平成28年版（LandUseCd-09）。
+#   https://nlftp.mlit.go.jp/ksj/gml/codelist/LandUseCd-09.html
+#
+# 別の年次を使うときは必ず GML の CodeSpace を見て確認すること。
+# 以前ここに別の版の表を書いていて、森林(0500)を建物用地と読み違えた。
+# 分布を見れば気づける（広島・島根なら森林が約6割、海水域が約2割）。
+CODELIST = "LandUseCd-09"
 LANDUSE_CLASSES = {
     "0100": "田",
     "0200": "その他の農用地",
-    "0300": "森林",
-    "0400": "荒地",
-    "0500": "建物用地",
-    "0600": "道路",
-    "0700": "鉄道",
-    "0801": "その他の用地",
-    "0901": "河川地及び湖沼",
-    "1000": "海浜",
-    "1100": "海水域",
-    "1400": "ゴルフ場",
-    "1500": "その他",
-    "0500_old": "建物用地",
+    "0500": "森林",
+    "0600": "荒地",
+    "0700": "建物用地",
+    "0901": "道路",
+    "0902": "鉄道",
+    "1000": "その他の用地",
+    "1100": "河川地及び湖沼",
+    "1400": "海浜",
+    "1500": "海水域",
+    "1600": "ゴルフ場",
 }
 
-# モデルに渡すときの並び。**建物用地を先頭に置く**（指定基準に直結するため）
-CHANNEL_ORDER = ("0500", "0600", "0700", "0100", "0200", "0300", "0400")
+# 平成28年の広島・島根8メッシュでの実測の出現割合（確認用）
+OBSERVED_SHARE = {
+    "0500": 59.22, "1500": 21.50, "0100": 7.32, "0700": 4.96, "0200": 2.80,
+    "1100": 1.89, "1000": 0.95, "0600": 0.71, "0901": 0.26, "1600": 0.20,
+    "0902": 0.16, "1400": 0.03,
+}
+
+# モデルに渡すときの並び。**建物用地を先頭に置く**（指定基準に直結するため）。
+# この9区分で実測の 99.6% を覆う。残り（鉄道・海浜・ゴルフ場）は UNKNOWN。
+CHANNEL_ORDER = ("0700", "0901", "1000", "0100", "0200", "0500", "0600",
+                 "1100", "1500")
 
 
 def mesh_code(lat: float, lon: float) -> str:
@@ -125,8 +142,10 @@ def tile_mesh_codes(geoinfo, tile=TILE):
 
 MESH_KEYS = ("メッシュ", "メッシュコード", "MESH_CODE", "mesh", "L03b_001",
              "L03b_c01", "MESHCODE")
-USE_KEYS = ("土地利用種別", "土地利用コード", "LANDUSE", "L03b_002", "landuse",
-            "L03b_c02", "LU_CODE")
+USE_KEYS = ("土地利用種別", "土地利用種", "土地利用コード", "LANDUSE", "L03b_002",
+            "landuse", "L03b_c02", "LU_CODE")
+# 「土地利用種」は DBF のフィールド名が **10バイトで打ち切られる**ため。
+# cp932 では漢字1字が2バイトなので「土地利用種別」(12B) が「土地利用種」(10B) になる。
 
 # 測地系。**ここを間違えると約430m ずれる**（1タイル 573m、1メッシュ 100m）。
 # 本プロジェクトのタイルは全件 EPSG:6668（JGD2011、世界測地系）。
@@ -227,6 +246,122 @@ def load_l03b(path):
     raise ValueError(f"未対応の形式: {p.suffix}（.shp か .geojson）")
 
 
+# ---- 格子で持つ版 ----------------------------------------------------------
+# 1次メッシュは 1/10細分で 800x800 セル（8 x 10 x 10）。
+# コード -> 辞書は 8ファイルで 512万件になって重いので、
+# 1次メッシュごとに 800x800 の uint8 配列に詰める（1枚 640KB）。
+
+SUBDIV = 800            # 1次メッシュあたりのセル数（各軸）
+UNKNOWN = 255           # 未整備・海域など
+
+
+def code_to_rowcol(code: str):
+    """10桁コード -> 1次メッシュ内の (南からの行, 西からの列)。"""
+    q, v, r, w, m, n = (int(code[4]), int(code[5]), int(code[6]),
+                        int(code[7]), int(code[8]), int(code[9]))
+    return q * 100 + r * 10 + m, v * 100 + w * 10 + n
+
+
+def load_l03b_grid(path, order=CHANNEL_ORDER):
+    """1ファイルを (1次メッシュコード, 800x800 の区分番号) にする。
+
+    区分番号は order の添字。order に無い区分と未整備は UNKNOWN。
+    """
+    table = load_l03b(path)
+    check_codes(table, Path(path).name)
+    idx = {c: i for i, c in enumerate(order)}
+    grid = np.full((SUBDIV, SUBDIV), UNKNOWN, np.uint8)
+    primary = None
+    for code, use in table.items():
+        if len(code) != 10:
+            continue
+        if primary is None:
+            primary = code[:4]
+        r, c = code_to_rowcol(code)
+        grid[r, c] = idx.get(use, UNKNOWN)
+    return primary, grid
+
+
+def check_codes(table, path=""):
+    """知らないコードが混ざっていないかを見る。年次を取り違えると全部ずれる。"""
+    from collections import Counter
+    c = Counter(table.values())
+    unknown = {k: v for k, v in c.items() if k not in LANDUSE_CLASSES}
+    if unknown:
+        raise ValueError(
+            f"{path}: {CODELIST} に無いコードがあります {dict(unknown)}。"
+            f"**年次が違うかもしれません。** GML の rangeParameters の "
+            f"CodeSpace を確認してください")
+    return c
+
+
+def load_all_grids(folder, order=CHANNEL_ORDER, verbose=True):
+    """フォルダの *.shp を全部読んで {1次メッシュコード: 800x800} にする。"""
+    folder = Path(folder)
+    shps = sorted(folder.glob("*.shp"))
+    if not shps:
+        raise FileNotFoundError(f"{folder} に .shp がありません")
+    out = {}
+    for p in shps:
+        primary, grid = load_l03b_grid(p, order)
+        out[primary] = grid
+        if verbose:
+            known = int((grid != UNKNOWN).sum())
+            print(f"  {p.name}: 1次メッシュ {primary} / "
+                  f"区分あり {known:,} / {SUBDIV * SUBDIV:,} セル "
+                  f"({100 * known / SUBDIV ** 2:.1f}%)")
+    return out
+
+
+def load_grids_npz(path):
+    """tools/dump_landuse_grids.py が書いた npz を読む。
+
+    シェープファイルを読むには pyshp が要り、それがあるのは geopack 環境。
+    学習側は mayo 環境なので、間に npz を置いて渡す。
+    """
+    z = np.load(path, allow_pickle=False)
+    order = tuple(str(x) for x in z["order"])
+    if order != tuple(CHANNEL_ORDER):
+        raise ValueError(
+            f"{Path(path).name}: チャネルの並びが違います。"
+            f"npz は {order} / いまのコードは {tuple(CHANNEL_ORDER)}。"
+            f"dump_landuse_grids.py で作り直してください")
+    return {str(k): z[f"g{k}"] for k in z["keys"]}
+
+
+def tile_channels_grid(geoinfo, grids, order=CHANNEL_ORDER, tile=TILE):
+    """格子版。(len(order), tile, tile) float32 の one-hot。
+
+    tile_channels と同じ結果だが、文字列を作らないので速い。
+    """
+    lon0, dlon = float(geoinfo[0]), float(geoinfo[1])
+    lat0, dlat = float(geoinfo[3]), float(geoinfo[5])
+    lons = lon0 + (np.arange(tile) + 0.5) * dlon
+    lats = lat0 + (np.arange(tile) + 0.5) * dlat
+    LA, LO = np.meshgrid(lats, lons, indexing="ij")
+
+    p = np.floor(LA * 1.5).astype(int)
+    u = np.floor(LO - 100.0).astype(int)
+    row = np.floor((LA - p / 1.5) / MESH_DLAT).astype(int)
+    col = np.floor((LO - (u + 100.0)) / MESH_DLON).astype(int)
+    np.clip(row, 0, SUBDIV - 1, out=row)
+    np.clip(col, 0, SUBDIV - 1, out=col)
+
+    cls = np.full((tile, tile), UNKNOWN, np.uint8)
+    for pk in np.unique(p * 100 + u):
+        key = f"{pk // 100:02d}{pk % 100:02d}"
+        g = grids.get(key)
+        if g is None:
+            continue
+        sel = (p * 100 + u) == pk
+        cls[sel] = g[row[sel], col[sel]]
+
+    out = np.zeros((len(order), tile, tile), np.float32)
+    for i in range(len(order)):
+        out[i][cls == i] = 1.0
+    return out, cls
+
+
 def tile_channels(geoinfo, table, order=CHANNEL_ORDER, tile=TILE):
     """1タイル分を one-hot のチャネルにする (len(order), tile, tile) float32。
 
@@ -293,7 +428,7 @@ def _selftest():
           f"{MESH_DLON / (DLON / TILE):.1f} 画素）")
 
     # (5) one-hot。建物用地だけの作り表で形と中身を見る
-    table = {c: "0500" for c in np.unique(codes)}
+    table = {c: CHANNEL_ORDER[0] for c in np.unique(codes)}   # 直書きしない
     ch = tile_channels(gi, table)
     print(f"  one-hot の形 {ch.shape} / 建物用地チャネルの合計 "
           f"{ch[0].sum():.0f}（期待 {TILE * TILE}）")
