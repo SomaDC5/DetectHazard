@@ -123,30 +123,108 @@ def tile_mesh_codes(geoinfo, tile=TILE):
     return out
 
 
-def load_l03b(path):
-    """L03-b の GeoJSON を読んで {メッシュコード: 土地利用コード} を返す。
+MESH_KEYS = ("メッシュ", "メッシュコード", "MESH_CODE", "mesh", "L03b_001",
+             "L03b_c01", "MESHCODE")
+USE_KEYS = ("土地利用種別", "土地利用コード", "LANDUSE", "L03b_002", "landuse",
+            "L03b_c02", "LU_CODE")
 
-    国土数値情報の GeoJSON は 1 フィーチャが 1 メッシュで、属性に
-    メッシュコード（`メッシュ` / `MESH_CODE` 等）と土地利用コード
-    （`土地利用種別` / `LANDUSE` 等）が入っている。
-    版によって属性名が違うので候補を順に試す。
+# 測地系。**ここを間違えると約430m ずれる**（1タイル 573m、1メッシュ 100m）。
+# 本プロジェクトのタイルは全件 EPSG:6668（JGD2011、世界測地系）。
+DATUM_WORLD = {4612, 6668, 4326, 6697}      # JGD2000 / JGD2011 / WGS84
+DATUM_TOKYO = {4301, 4300}                  # 日本測地系（旧測地系）
+
+
+def _check_datum(epsg, path):
+    """日本測地系のファイルを黙って受け入れない。
+
+    国土数値情報の土地利用細分メッシュは、平成18年以降の年次で
+    **日本測地系と世界測地系の両方**が配布されている。日本測地系を
+    読むと、広島・島根の緯度で **約430m（約96画素、メッシュ4セル超）**
+    ずれる。タイル1枚が 573m なので、ほぼ隣のタイルを見ることになる。
     """
-    path = Path(path)
-    d = json.loads(path.read_text(encoding="utf-8"))
+    if epsg is None:
+        raise ValueError(
+            f"{Path(path).name}: 測地系が判定できません。"
+            f"シェープファイルの .prj があるか確認してください。"
+            f"**世界測地系（JGD2000/JGD2011）のファイルを使ってください**")
+    e = int(epsg)
+    if e in DATUM_TOKYO:
+        raise ValueError(
+            f"{Path(path).name}: EPSG:{e} は**日本測地系**です。"
+            f"本プロジェクトのタイルは EPSG:6668（世界測地系）なので、"
+            f"約430m ずれます。ダウンロードページで**世界測地系**の方を"
+            f"選び直してください")
+    if e not in DATUM_WORLD:
+        raise ValueError(
+            f"{Path(path).name}: EPSG:{e} は想定外です。"
+            f"世界測地系（{sorted(DATUM_WORLD)}）のファイルを使ってください")
+    return e
+
+
+def _pick_keys(fields):
+    mk = next((k for k in MESH_KEYS if k in fields), None)
+    uk = next((k for k in USE_KEYS if k in fields), None)
+    if mk is None or uk is None:
+        raise KeyError(f"属性名が分かりません: {sorted(fields)[:12]}")
+    return mk, uk
+
+
+def load_l03b_geojson(path):
+    """GeoJSON 版。配布には無いが、自分で変換した場合に使う。
+
+    **測地系の検査ができない**ので、変換元が世界測地系だったことを
+    自分で保証すること。
+    """
+    d = json.loads(Path(path).read_text(encoding="utf-8"))
     feats = d.get("features", d if isinstance(d, list) else [])
-    mesh_keys = ("メッシュ", "メッシュコード", "MESH_CODE", "mesh", "L03b_001")
-    use_keys = ("土地利用種別", "土地利用コード", "LANDUSE", "L03b_002", "landuse")
-    out = {}
-    mk = uk = None
+    out, mk, uk = {}, None, None
     for f in feats:
         pr = f.get("properties", f)
         if mk is None:
-            mk = next((k for k in mesh_keys if k in pr), None)
-            uk = next((k for k in use_keys if k in pr), None)
-            if mk is None or uk is None:
-                raise KeyError(f"属性名が分かりません: {sorted(pr)[:12]}")
+            mk, uk = _pick_keys(pr)
         out[str(pr[mk])] = str(pr[uk]).zfill(4)
     return out
+
+
+def load_l03b_shapefile(path):
+    """シェープファイル版（配布形式）。`geopack` 環境の python で動かす。
+
+    .prj から測地系を読んで、日本測地系なら止める。
+    """
+    import shapefile                      # pyshp（純 Python。DLL 無し）
+
+    path = Path(path)
+    epsg = None
+    prj = path.with_suffix(".prj")
+    if prj.exists():
+        txt = prj.read_text(encoding="utf-8", errors="ignore")
+        for code, keys in ((6668, ("JGD2011", "JGD_2011")),
+                           (4612, ("JGD2000", "JGD_2000", "Japan_2000")),
+                           (4301, ("Tokyo",)),
+                           (4326, ("WGS_1984", "WGS84"))):
+            if any(k in txt for k in keys):
+                epsg = code
+                break
+    _check_datum(epsg, path)
+
+    r = shapefile.Reader(str(path), encoding="cp932")
+    fields = [f[0] for f in r.fields[1:]]
+    mk, uk = _pick_keys(fields)
+    im, iu = fields.index(mk), fields.index(uk)
+    out = {}
+    for rec in r.iterRecords():
+        out[str(rec[im])] = str(rec[iu]).zfill(4)
+    return out
+
+
+def load_l03b(path):
+    """拡張子で振り分ける。"""
+    p = Path(path)
+    if p.suffix.lower() in (".shp",):
+        return load_l03b_shapefile(p)
+    if p.suffix.lower() in (".json", ".geojson"):
+        return load_l03b_geojson(p)
+    raise ValueError(f"未対応の形式: {p.suffix}（.shp か .geojson）")
 
 
 def tile_channels(geoinfo, table, order=CHANNEL_ORDER, tile=TILE):
@@ -222,6 +300,21 @@ def _selftest():
     assert ch.shape == (len(CHANNEL_ORDER), TILE, TILE)
     assert ch[0].sum() == TILE * TILE
     assert ch[1:].sum() == 0
+    # (6) 測地系の検査が日本測地系を弾くか
+    import tempfile
+    for epsg, want_ng in ((6668, False), (4612, False), (4301, True), (2444, True),
+                          (None, True)):
+        try:
+            _check_datum(epsg, "dummy.shp")
+            got_ng = False
+        except ValueError:
+            got_ng = True
+        mark = "OK " if got_ng == want_ng else "NG "
+        if got_ng != want_ng:
+            ok = False
+        print(f"  {mark}測地系 EPSG:{epsg} -> "
+              f"{'弾く' if got_ng else '通す'}（期待 {'弾く' if want_ng else '通す'}）")
+
     print("  自己検査: 問題なし" if ok else "  自己検査: NG")
     return ok
 
