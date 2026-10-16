@@ -140,6 +140,47 @@ if os.path.exists(save_path):'''
     return src, ["早期終了を学習ループに追加"]
 
 
+
+def _add_seed(src):
+    """乱数を固定する。戻り値は (新しい中身, 直した内容)。
+
+    **どのノートブックも torch.manual_seed を呼んでいなかった**（29件すべて）。
+    CFG.seed は random.seed にしか渡っておらず、それは背景タイルの選択に
+    使うだけなので、bg_ratio=0 の条件では**何も変えていなかった**。
+    つまり
+
+      ・モデルの初期値は毎回ちがう（PyTorch の既定は OS のエントロピー）
+      ・DataLoader の shuffle も毎回ちがう
+
+    状態で、既存の全条件は再現できない。複数シードの実験をするには、
+    まずここを固定しないと「シードを変えた」ことにならない。
+
+    なお cuDNN の非決定性は残るので、ビット単位で同じにはならない
+    （deterministic=True は学習が遅くなるので入れない）。
+    """
+    if "torch.manual_seed" in src:
+        return src, []
+    anchor = "model = build_model(get(CONDITION).arch)"
+    if anchor not in src:
+        return src, []
+    block = """# ============================================================
+# 乱数の固定。**これが無いと CFG.seed は何も変えない。**
+# CFG.seed は random.seed にしか渡っておらず、それは背景タイルの選択に
+# 使うだけなので、bg_ratio=0 ではモデルの初期値も shuffle も毎回ちがった。
+# cuDNN の非決定性は残るのでビット単位では一致しない。
+# ============================================================
+import random as _random
+
+torch.manual_seed(CFG.seed)
+torch.cuda.manual_seed_all(CFG.seed)
+np.random.seed(CFG.seed)
+_random.seed(CFG.seed)
+print("乱数を固定:", CFG.seed)
+
+"""
+    return src.replace(anchor, block + anchor, 1), ["乱数の固定を追加"]
+
+
 def _is_train_split(line):
     """学習の分割セルか（評価セルの train_test_split は触らない）。"""
     return "dataset2" in line or "idx_all" in line or "idx_trainval" in line
@@ -195,6 +236,15 @@ def wire(cond_dir, check_only=False):
         # 損失まわり（未使用クラスの削除と NEEDS_WEIGHT の塞ぎ）
         if "build_loss(CONDITION)" in new or "class FocalTverskyLoss" in new:
             fixed, done = _fix_loss(new)
+            if done:
+                if check_only:
+                    remaining += [f"c{ci} {d}" for d in done]
+                else:
+                    new = fixed
+                    changes += [f"c{ci} {d}" for d in done]
+        # 乱数の固定（モデルの初期値と shuffle）
+        if "build_model(get(CONDITION).arch)" in new:
+            fixed, done = _add_seed(new)
             if done:
                 if check_only:
                     remaining += [f"c{ci} {d}" for d in done]
