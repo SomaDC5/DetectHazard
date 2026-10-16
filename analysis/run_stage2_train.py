@@ -47,6 +47,7 @@ from analysis import config
 from analysis.data import load_pkl
 from analysis.run_overlap_eval import (OFFSETS, cos_window, grid_index,  # noqa: E402
                                        mosaic, prep_mask)
+from dc5lib import inputs as minputs  # noqa: E402
 from dc5lib import landuse as _landuse  # noqa: E402
 from dc5lib import paths, stage2                                        # noqa: E402
 from dc5lib.device import pick_device                                   # noqa: E402
@@ -68,16 +69,23 @@ def split_indices(n_hz):
     return idx_train, idx_val, idx_test
 
 
-def cache_path(cond_name, split):
+def cache_path(cond_name, split, wide=False, lu=False):
+    """構成ごとに別ファイルにする。中身が違うのに同じ名前だと混ざる。"""
     d = paths.cache_dir("stage2")
     d.mkdir(parents=True, exist_ok=True)
-    return d / f"{cond_name}__hiroshima__{split}.npz"
+    tag = "" if not wide else ("__wide_lu" if lu else "__wide")
+    return d / f"{cond_name}__hiroshima__{split}{tag}.npz"
 
 
 @torch.no_grad()
-def build(cond, split, device, batch_hint=500):
+def build(cond, split, device, batch_hint=500, wide=False, lu=False,
+          pkl_override=None):
     """1段目を走らせて、かたまりごとの切り出し・スカラー・ラベルを作る。"""
-    pkl = dataset_path("Hiroshima", cond.pkl_for("Hiroshima"))
+    # 土地利用を2段目に入れるときは、1段目の pkl に LandUse が無いことがある。
+    # **1段目のモデルは触らない**（SAM+APM しか使わない）ので、
+    # 同じタイル並びで LandUse を持つ pkl に差し替えてよい。
+    pkl = dataset_path("Hiroshima",
+                       pkl_override or cond.pkl_for("Hiroshima"))
     print(f"  読み込み: {pkl.name}")
     ds = load_pkl(pkl)
     hz = [k for k in range(len(ds.No)) if np.max(np.asarray(ds.Mask[k])) >= 1]
@@ -92,7 +100,11 @@ def build(cond, split, device, batch_hint=500):
     gi, gj, cell = grid_index(ds)
     W = cos_window()
 
-    C, S, Y, T, B = [], [], [], [], []
+    if wide:
+        stage2.set_wide_channels(lu)
+        print(f"  広域の枝あり（{stage2.N_WIDE_CH}ch"
+              f"{'・土地利用こみ' if lu else ''}）")
+    C, WD, S, Y, T, B = [], [], [], [], [], []
     t0 = time.time()
     for n, k in enumerate(tiles):
         D, A, _, LU = mosaic(ds, cell, gi, gj, k)
@@ -107,8 +119,10 @@ def build(cond, split, device, batch_hint=500):
         dem = torch.from_numpy(np.stack(dems)[:, None]).float().to(device)
         air = (torch.from_numpy(np.stack(airs).transpose(0, 3, 1, 2))
                .float().to(device) / 255.0)
-        extra = ([] if LU is None
-                 else [_landuse.onehot_torch(np.stack(lus), device=device)])
+        # **pkl に土地利用があるかではなく、モデルが3入力かで決める。**
+        # _lu.pkl を2入力の条件で読むと、余計な引数を渡して落ちる。
+        extra = ([_landuse.onehot_torch(np.stack(lus), device=device)]
+                 if (LU is not None and minputs.needs_landuse(cond)) else [])
         lo = model(dem, air, *extra)[:, 0]
         pr = torch.sigmoid(lo).cpu().numpy()
         lg = lo.cpu().numpy()
@@ -131,7 +145,16 @@ def build(cond, split, device, batch_hint=500):
         lab, sizes = label_instances(pred, 8, 10)
         if len(sizes) == 0:
             continue
-        crops, scal, ids = stage2.extract_tile(D, A, logit, pred, lab, sizes)
+        if wide:
+            lu_mos = LU if lu else None
+            if lu and LU is None:
+                raise RuntimeError("土地利用こみを指定しましたが pkl に LandUse が"
+                                   "ありません。*_lu.pkl の条件を指定してください")
+            crops, wd, scal, ids = stage2.extract_tile(
+                D, A, logit, pred, lab, sizes, wide=True, lu_mos=lu_mos)
+            WD.append(wd.astype(np.float16))
+        else:
+            crops, scal, ids = stage2.extract_tile(D, A, logit, pred, lab, sizes)
 
         gl, gs = label_instances(gt, 8, 10)
         if len(gs):
@@ -149,10 +172,11 @@ def build(cond, split, device, batch_hint=500):
             el = time.time() - t0
             print(f"    {n}/{len(tiles)}  {el:.0f}秒", end="\r", flush=True)
 
-    out = cache_path(cond.name, split)
+    out = cache_path(cond.name, split, wide, lu)
     C = np.concatenate(C); S = np.concatenate(S)
     Y = np.concatenate(Y); T = np.concatenate(T); B = np.concatenate(B)
-    np.savez_compressed(out, crops=C, scalars=S, label=Y, tile=T, blob=B)
+    kw = {"wide": np.concatenate(WD)} if wide else {}
+    np.savez_compressed(out, crops=C, scalars=S, label=Y, tile=T, blob=B, **kw)
     print(f"  書き出し: {out.name}  かたまり {len(Y):,}（的中 {int(Y.sum()):,} / "
           f"外れ {int((1 - Y).sum()):,} = {100 * (1 - Y.mean()):.1f}%）"
           f"  {out.stat().st_size / 2**20:.0f}MB")
@@ -199,12 +223,19 @@ def augment(x, jitter=0):
 
 def train(cond, name, device, epochs=60, batch_size=128, lr=1e-3,
           patience=12, seed=42, val_frac=0.2, use_augment=False,
-          no_scalar=False, no_logit=False, weight_decay=0.0, jitter=0):
-    f = cache_path(cond.name, "val")
+          no_scalar=False, no_logit=False, weight_decay=0.0, jitter=0,
+          wide=False, lu=False, no_narrow=False):
+    f = cache_path(cond.name, "val", wide, lu)
     if not f.exists():
         sys.exit(f"{f} がありません。先に --build を実行してください")
     z = np.load(f)
     X, S, Y, T = z["crops"], z["scalars"], z["label"], z["tile"]
+    Wd = z["wide"] if wide else None
+    if wide:
+        stage2.set_wide_channels(lu)
+        assert Wd.shape[1] == stage2.N_WIDE_CH, (Wd.shape, stage2.N_WIDE_CH)
+        print(f"  広域の枝 {Wd.shape[1]}ch"
+              f"{'・土地利用こみ' if lu else ''}")
     print(f"かたまり {len(Y):,}（的中率 {100 * Y.mean():.1f}%）")
 
     # タイル単位で分ける。同じタイルのかたまりが両側に跨がらないように
@@ -223,6 +254,13 @@ def train(cond, name, device, epochs=60, batch_size=128, lr=1e-3,
         S = np.zeros_like(S)
         print("※ スカラーを全部0にした（画像だけで分けられるかの診断）")
 
+    if no_narrow:
+        # 近傍の切り出しを全部0にする。広域だけで分けられるかの診断。
+        # 14.3 で近傍 64x64 の情報はロジットと重複と分かったので、
+        # **広域 1,147m に新しい情報があるか**を単独で見る。
+        X = np.zeros_like(X)
+        print("※ 近傍の切り出しを全部0にした（広域だけで分けられるかの診断）")
+
     if no_logit:
         # ロジットを画像からもスカラーからも消す。
         # ch5 がロジットマップなので、スカラーだけ0にしても情報は残っている。
@@ -236,7 +274,8 @@ def train(cond, name, device, epochs=60, batch_size=128, lr=1e-3,
               "（地形と写真だけで分けられるかの診断）")
 
     torch.manual_seed(seed)
-    model = stage2.Stage2Net().to(device)
+    model = stage2.Stage2Net(
+        wide_ch=stage2.N_WIDE_CH if wide else 0).to(device)
     print(f"Stage2Net パラメータ {stage2.n_params(model):,}")
     opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     lossf = nn.BCEWithLogitsLoss()
@@ -244,10 +283,11 @@ def train(cond, name, device, epochs=60, batch_size=128, lr=1e-3,
     def tensors(mask):
         return (torch.from_numpy(X[mask].astype(np.float32)),
                 torch.from_numpy(S[mask].astype(np.float32)),
-                torch.from_numpy(Y[mask].astype(np.float32)))
+                torch.from_numpy(Y[mask].astype(np.float32)),
+                torch.from_numpy(Wd[mask].astype(np.float32)) if wide else None)
 
-    Xtr, Str, Ytr = tensors(~is_val)
-    Xva, Sva, Yva = tensors(is_val)
+    Xtr, Str, Ytr, Wtr = tensors(~is_val)
+    Xva, Sva, Yva, Wva = tensors(is_val)
     n = len(Ytr)
 
     best, best_ep, since, best_state = -1.0, 0, 0, None
@@ -259,9 +299,15 @@ def train(cond, name, device, epochs=60, batch_size=128, lr=1e-3,
             b = perm[s:s + batch_size]
             opt.zero_grad()
             xb = Xtr[b].to(device)
+            wb = Wtr[b].to(device) if wide else None
             if use_augment or jitter:
+                # 近傍と広域は**同じ変換**を当てる（別々にすると向きが食い違う）
+                g = torch.get_rng_state()
                 xb = augment(xb, jitter=jitter)
-            out = model(xb, Str[b].to(device))
+                if wide:
+                    torch.set_rng_state(g)
+                    wb = augment(wb, jitter=jitter)
+            out = model(xb, Str[b].to(device), wb)
             loss = lossf(out, Ytr[b].to(device))
             loss.backward()
             opt.step()
@@ -271,7 +317,9 @@ def train(cond, name, device, epochs=60, batch_size=128, lr=1e-3,
             sc = []
             for s in range(0, len(Yva), 512):
                 sc.append(model(Xva[s:s + 512].to(device),
-                                Sva[s:s + 512].to(device)).cpu().numpy())
+                                Sva[s:s + 512].to(device),
+                                Wva[s:s + 512].to(device) if wide else None
+                                ).cpu().numpy())
             sc = np.concatenate(sc)
         a = auc(Yva.numpy() > 0.5, sc)
         if a > best:
@@ -297,7 +345,9 @@ def train(cond, name, device, epochs=60, batch_size=128, lr=1e-3,
     out.parent.mkdir(parents=True, exist_ok=True)
     torch.save({"model_state_dict": model.state_dict(), "epoch": best_ep,
                 "val_auc": float(best), "base_auc": float(base),
-                "stage1": cond.name, "crop": stage2.CROP}, out)
+                "stage1": cond.name, "crop": stage2.CROP,
+                "wide_ch": stage2.N_WIDE_CH if wide else 0,
+                "wide": bool(wide), "landuse": bool(lu)}, out)
     print("重みを保存:", out)
     return out
 
@@ -318,10 +368,19 @@ def main():
                     help="反転と90度回転で増やす（かたまりが少ないので効く）")
     ap.add_argument("--no-scalar", action="store_true",
                     help="スカラーを0にする。画像だけで分けられるかの診断")
+    ap.add_argument("--no-narrow", action="store_true",
+                    help="近傍の切り出しを0にする。広域だけで分けられるかの診断")
     ap.add_argument("--no-logit", action="store_true",
                     help="ロジットを画像(ch5)とスカラーの両方から消す。"
                          "地形と写真の文脈だけで分けられるかの診断")
     ap.add_argument("--weight-decay", type=float, default=0.0)
+    ap.add_argument("--wide", action="store_true",
+                    help="広域の枝を足す（モザイクから 256px を 64px に縮小）")
+    ap.add_argument("--landuse", action="store_true",
+                    help="広域の枝に土地利用も入れる（--wide が要る）")
+    ap.add_argument("--pkl", default=None,
+                    help="データセットを差し替える。--landuse のとき "
+                         "hiroshima_sam_apm_lu.pkl を指定する")
     ap.add_argument("--jitter", type=int, default=0,
                     help="窓をこの画素数までずらす（オーバーラップ学習の2段目版）")
     ap.add_argument("--device", default=None)
@@ -337,14 +396,16 @@ def main():
     if args.build:
         for sp in args.splits:
             print(f"\n--- かたまりデータを作る: {sp} ---")
-            build(cond, sp, device)
+            build(cond, sp, device, wide=args.wide, lu=args.landuse,
+                  pkl_override=args.pkl)
     if args.train:
         print(f"\n--- 2段目を学習: {args.name} ---")
         train(cond, args.name, device, epochs=args.epochs,
               batch_size=args.batch_size, lr=args.lr, patience=args.patience,
               use_augment=args.augment, no_scalar=args.no_scalar,
               no_logit=args.no_logit, weight_decay=args.weight_decay,
-              jitter=args.jitter)
+              jitter=args.jitter, wide=args.wide, lu=args.landuse,
+              no_narrow=args.no_narrow)
 
 
 if __name__ == "__main__":

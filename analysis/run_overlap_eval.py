@@ -25,6 +25,7 @@ from scipy.ndimage import gaussian_filter
 from sklearn.model_selection import train_test_split
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from dc5lib import inputs as minputs  # noqa: E402
 from dc5lib import landuse as _landuse  # noqa: E402
 from dc5lib import results as dc5results                      # noqa: E402
 from dc5lib.instance_eval import PRIMARY, InstanceEvaluator    # noqa: E402
@@ -155,8 +156,10 @@ def evaluate(cond, region, device, verbose=True):
                 lus.append(LU[r:r + 128, c:c + 128])
         dem = torch.from_numpy(np.stack(dems)[:, None]).float().to(device)
         air = torch.from_numpy(np.stack(airs).transpose(0, 3, 1, 2)).float().to(device) / 255.0
-        extra = ([] if LU is None
-                 else [_landuse.onehot_torch(np.stack(lus), device=device)])
+        # **pkl に土地利用があるかではなく、モデルが3入力かで決める。**
+        # _lu.pkl を2入力の条件で読むと、余計な引数を渡して落ちる。
+        extra = ([_landuse.onehot_torch(np.stack(lus), device=device)]
+                 if (LU is not None and minputs.needs_landuse(cond)) else [])
         pr = torch.sigmoid(model(dem, air, *extra)).cpu().numpy()[:, 0]
 
         wa = np.zeros((128, 128), np.float32)

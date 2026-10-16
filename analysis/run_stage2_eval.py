@@ -35,6 +35,7 @@ from analysis.run_overlap_eval import (OFFSETS, cos_window, grid_index,  # noqa:
                                        mosaic, prep_mask)
 from analysis.run_overlap_prune import full_scores, score               # noqa: E402
 from analysis.run_stage2_train import split_indices                     # noqa: E402
+from dc5lib import inputs as minputs  # noqa: E402
 from dc5lib import landuse as _landuse  # noqa: E402
 from dc5lib import paths, stage2                                        # noqa: E402
 from dc5lib.device import pick_device                                   # noqa: E402
@@ -47,7 +48,8 @@ THRS = [0.0, 0.2, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.7]
 
 
 @torch.no_grad()
-def run(stage1, model2, split, device, region="hiroshima"):
+def run(stage1, model2, split, device, region="hiroshima", wide_ch=0,
+        use_lu=False):
     """1段目を走らせ、かたまりごとに2段目の「残す確率」を付ける。
 
     戻り値 (GT, PB, rows) で rows は tile / blob / keep を持つ DataFrame。
@@ -86,8 +88,10 @@ def run(stage1, model2, split, device, region="hiroshima"):
         dem = torch.from_numpy(np.stack(dems)[:, None]).float().to(device)
         air = (torch.from_numpy(np.stack(airs).transpose(0, 3, 1, 2))
                .float().to(device) / 255.0)
-        extra = ([] if LU is None
-                 else [_landuse.onehot_torch(np.stack(lus), device=device)])
+        # **pkl に土地利用があるかではなく、モデルが3入力かで決める。**
+        # _lu.pkl を2入力の条件で読むと、余計な引数を渡して落ちる。
+        extra = ([_landuse.onehot_torch(np.stack(lus), device=device)]
+                 if (LU is not None and minputs.needs_landuse(stage1)) else [])
         lo = m1(dem, air, *extra)[:, 0]
         pr = torch.sigmoid(lo).cpu().numpy()
         lg = lo.cpu().numpy()
@@ -111,10 +115,17 @@ def run(stage1, model2, split, device, region="hiroshima"):
         lab, sizes = label_instances(pred, 8, 10)
         if len(sizes) == 0:
             continue
-        crops, scal, ids = stage2.extract_tile(D, A, logit, pred, lab, sizes)
+        if wide_ch:
+            crops, wd, scal, ids = stage2.extract_tile(
+                D, A, logit, pred, lab, sizes, wide=True,
+                lu_mos=LU if use_lu else None)
+            wt = torch.from_numpy(wd).to(device)
+        else:
+            crops, scal, ids = stage2.extract_tile(D, A, logit, pred, lab, sizes)
+            wt = None
         keep = torch.sigmoid(model2(
             torch.from_numpy(crops).to(device),
-            torch.from_numpy(scal).to(device))).cpu().numpy()
+            torch.from_numpy(scal).to(device), wt)).cpu().numpy()
         for j in range(len(ids)):
             rows.append(dict(tile=n, blob=int(ids[j]), keep=float(keep[j]),
                              logit_max=float(scal[j, 2]) * stage2.LOGIT_SCALE))
@@ -173,14 +184,23 @@ def main():
     if not w.exists():
         sys.exit(f"{w} がありません。run_stage2_train.py で学習してください")
     ck = torch.load(w, map_location=device)
-    m2 = stage2.Stage2Net().to(device)
+    wide_ch = int(ck.get("wide_ch", 0))
+    use_lu = bool(ck.get("landuse", False))
+    if wide_ch:
+        stage2.set_wide_channels(use_lu)
+        if stage2.N_WIDE_CH != wide_ch:
+            sys.exit(f"重みの広域チャネル {wide_ch} と設定 {stage2.N_WIDE_CH} が違います")
+    m2 = stage2.Stage2Net(wide_ch=wide_ch).to(device)
     m2.load_state_dict(ck["model_state_dict"])
     m2.eval()
+    if wide_ch:
+        print(f"  広域の枝 {wide_ch}ch{'・土地利用こみ' if use_lu else ''}")
     print(f"1段目 {stage1.name}（凍結）/ 2段目 {args.model} "
           f"(ep{ck.get('epoch')} 検証AUC {ck.get('val_auc', float('nan')):.4f})")
     print(f"device {device}")
 
-    GT, PB, rows = run(stage1, m2, args.split, device, args.region)
+    GT, PB, rows = run(stage1, m2, args.split, device, args.region,
+                       wide_ch=wide_ch, use_lu=use_lu)
     R0, P0, F0, n0 = score(GT, PB)
     print(f"\nかたまり {len(rows)}")
     print(f"刈り取り前   箇所R {R0:.4f} / P {P0:.4f} / F {F0:.4f} / 予測数 {n0}")

@@ -47,6 +47,7 @@ from analysis.run_instance_eval import SETTINGS                      # noqa: E40
 from analysis.run_overlap_eval import (OFFSETS, REGION_DIR,          # noqa: E402
                                        cos_window, grid_index, mosaic,
                                        prep_mask, target_tiles)
+from dc5lib import inputs as minputs  # noqa: E402
 from dc5lib import landuse as _landuse  # noqa: E402
 from dc5lib.device import pick_device                                # noqa: E402
 from dc5lib.instance_eval import (PRIMARY, label_instances,          # noqa: E402
@@ -98,8 +99,10 @@ def infer(cond, region, device, verbose=True):
         dem = torch.from_numpy(np.stack(dems)[:, None]).float().to(device)
         air = (torch.from_numpy(np.stack(airs).transpose(0, 3, 1, 2))
                .float().to(device) / 255.0)
-        extra = ([] if LU is None
-                 else [_landuse.onehot_torch(np.stack(lus), device=device)])
+        # **pkl に土地利用があるかではなく、モデルが3入力かで決める。**
+        # _lu.pkl を2入力の条件で読むと、余計な引数を渡して落ちる。
+        extra = ([_landuse.onehot_torch(np.stack(lus), device=device)]
+                 if (LU is not None and minputs.needs_landuse(cond)) else [])
         logit = model(dem, air, *extra)[:, 0]
         pr = torch.sigmoid(logit).cpu().numpy()
         lg = logit.cpu().numpy()
