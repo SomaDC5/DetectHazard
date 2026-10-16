@@ -34,6 +34,7 @@ import torch  # noqa: E402
 
 from analysis import config, infer, instances  # noqa: E402
 from analysis.data import build_tileset  # noqa: E402
+from dc5lib import inputs as minputs  # noqa: E402
 from dc5lib.models import build_model_for, load_weights  # noqa: E402
 
 INSTANCES_DIR = os.path.join(config.OUTPUT_DIR, "instances")
@@ -148,7 +149,9 @@ def main():
         for (pkl_path, bg_ratio), group in config.group_by_pkl(todo, region).items():
             need_air = any(c.use_airphoto for c in group)
             print(f"\n[{region}] {os.path.basename(pkl_path)}")
-            tiles = build_tileset(pkl_path, region, need_air, bg_ratio=bg_ratio)
+            tiles = build_tileset(pkl_path, region, need_air, bg_ratio=bg_ratio,
+                                  need_landuse=any(minputs.needs_landuse(c)
+                                                   for c in group))
             for c in group:
                 print(f"  → {c.name}")
                 df, inst = run_condition(c, tiles, device, args.batch_size,

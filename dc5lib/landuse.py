@@ -380,6 +380,34 @@ def tile_channels(geoinfo, table, order=CHANNEL_ORDER, tile=TILE):
     return out
 
 
+
+def onehot(cls, n=None, dtype=np.float32):
+    """区分番号 [..., H, W] を one-hot [..., n, H, W] にする。
+
+    pkl には番号1チャネルで入れてある（島根全件を9chの float32 で持つと
+    14.5GB になる）。モデルに入れる直前にバッチごとに展開する。
+    UNKNOWN(255) は全チャネル0になる。
+    """
+    cls = np.asarray(cls)
+    n = len(CHANNEL_ORDER) if n is None else n
+    out = np.zeros(cls.shape[:-2] + (n,) + cls.shape[-2:], dtype=dtype)
+    for i in range(n):
+        out[..., i, :, :] = (cls == i)
+    return out
+
+
+def onehot_torch(cls, n=None, device=None, dtype=None):
+    """torch 版。GPU 上で展開する。cls は uint8 の [B, H, W]。"""
+    import torch
+    n = len(CHANNEL_ORDER) if n is None else n
+    t = torch.as_tensor(np.asarray(cls), device=device)
+    out = torch.zeros((t.shape[0], n) + tuple(t.shape[1:]),
+                      device=t.device, dtype=dtype or torch.float32)
+    for i in range(n):
+        out[:, i] = (t == i)
+    return out
+
+
 def _selftest():
     ok = True
 
@@ -435,6 +463,16 @@ def _selftest():
     assert ch.shape == (len(CHANNEL_ORDER), TILE, TILE)
     assert ch[0].sum() == TILE * TILE
     assert ch[1:].sum() == 0
+    # (5b) onehot の往復
+    cls = np.array([[0, 1, UNKNOWN], [len(CHANNEL_ORDER) - 1, 0, 2]], np.uint8)
+    oh = onehot(cls)
+    back = np.where(oh.sum(axis=0) > 0, oh.argmax(axis=0), UNKNOWN).astype(np.uint8)
+    print("  onehot の形 %s / 往復 %s"
+          % (oh.shape, "OK" if np.array_equal(back, cls) else "NG"))
+    if not np.array_equal(back, cls):
+        ok = False
+    assert oh[:, 0, 2].sum() == 0, "UNKNOWN が全チャネル0になっていない"
+
     # (6) 測地系の検査が日本測地系を弾くか
     import tempfile
     for epsg, want_ng in ((6668, False), (4612, False), (4301, True), (2444, True),
