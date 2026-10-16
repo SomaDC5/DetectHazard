@@ -65,8 +65,10 @@ def run_condition(cond, tiles, device, batch_size=32, connectivity=8, min_size=1
         e = min(s + batch_size, n)
         terrain = torch.from_numpy(tiles.terrain[s:e]).to(device)
         if cond.use_airphoto:
-            air = torch.from_numpy(tiles.air[s:e]).to(device).float() / 255.0
-            logits = model(terrain, air)
+            logits = model(*minputs.model_args(
+                cond, terrain, tiles.air[s:e],
+                None if tiles.landuse is None else tiles.landuse[s:e],
+                device=device))
         else:
             logits = model(terrain)
         pred = (torch.sigmoid(logits) > thr).squeeze(1).cpu().numpy()

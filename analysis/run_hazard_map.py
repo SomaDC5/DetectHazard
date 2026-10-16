@@ -59,6 +59,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from analysis.data import load_pkl                                  # noqa: E402
 from analysis.run_overlap_eval import (DLON, DLAT, OFFSETS, REGION_DIR,  # noqa: E402
                                        cos_window, grid_index, mosaic, prep_mask)
+from dc5lib import landuse as _landuse  # noqa: E402
 from dc5lib import ensembles as ens                                 # noqa: E402
 from dc5lib.device import pick_device                               # noqa: E402
 from dc5lib.models import build_model_for, load_weights             # noqa: E402
@@ -107,7 +108,10 @@ def predict_region(cond, region, overlap, device, verbose=True):
             if cond.use_airphoto:
                 a = torch.from_numpy(np.ascontiguousarray(
                     airs.transpose(0, 3, 1, 2))).to(device).float() / 255.0
-                logit = model(t, a)
+                extra = ([] if LU is None else [_landuse.onehot_torch(
+                    np.stack([LU[TILE + dy:2 * TILE + dy, TILE + dx:2 * TILE + dx]
+                              for dy, dx in OFFSETS]), device=device)])
+                logit = model(t, a, *extra)
             else:
                 logit = model(t)
             p = torch.sigmoid(logit).squeeze(1).cpu().numpy()        # [9,128,128]
@@ -128,7 +132,11 @@ def predict_region(cond, region, overlap, device, verbose=True):
             if cond.use_airphoto:
                 a = np.asarray(ds.AirPhoto[k], np.uint8).transpose(2, 0, 1)[None]
                 a = torch.from_numpy(np.ascontiguousarray(a)).to(device).float() / 255.0
-                logit = model(t, a)
+                # 従来推論（貼り合わせない）経路。土地利用は中央タイルのものだけ
+                extra = ([] if not hasattr(ds, "LandUse")
+                         else [_landuse.onehot_torch(
+                             np.asarray(ds.LandUse[k], np.uint8)[None], device=device)])
+                logit = model(t, a, *extra)
             else:
                 logit = model(t)
             out[k] = torch.sigmoid(logit).squeeze().cpu().numpy()

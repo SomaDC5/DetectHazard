@@ -196,13 +196,20 @@ def fig_inputs(out: Path, condition="FinalFusion_SAM_APM", n=3):
     picks = [k for _, k in cand[:n]]
     print("  選んだタイル:", [int(ds.No[k]) for k in picks])
 
+    # 傾斜角の色は全タイルで共通にする（タイルごとに伸縮すると比べられない）
+    vmax = float(np.percentile(
+        np.concatenate([np.asarray(ds.DEM[k], np.float32).ravel() for k in picks]), 99))
+    vmax = max(10.0, round(vmax / 5) * 5)
+    print(f"  傾斜角の表示範囲: 0〜{vmax:.0f} 度")
+
     fig, axes = plt.subplots(n, 3, figsize=(6.4, 2.2 * n))
     axes = np.atleast_2d(axes)
+    im0 = None
     for i, k in enumerate(picks):
         sam = np.asarray(ds.DEM[k], np.float32)
         air = np.asarray(ds.AirPhoto[k], np.uint8)
         gt = preprocess_mask(ds.Mask[k]) > 0
-        axes[i, 0].imshow(sam, cmap="terrain")
+        im0 = axes[i, 0].imshow(sam, cmap="YlOrRd", vmin=0, vmax=vmax)
         axes[i, 1].imshow(air)
         axes[i, 2].imshow(air)
         axes[i, 2].imshow(np.dstack([gt, np.zeros_like(gt), np.zeros_like(gt),
@@ -213,7 +220,14 @@ def fig_inputs(out: Path, condition="FinalFusion_SAM_APM", n=3):
                 axes[i, j].set_title(ttl, fontsize=9)
         axes[i, 0].set_ylabel(f"タイル {int(ds.No[k])}", fontsize=8)
     fig.suptitle("入力データの例（1タイル = 128×128 画素 = 573 m 四方）", fontsize=9)
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, 0.06, 1, 1))
+    # 傾斜角の凡例。単位が分からないと図の意味が伝わらない
+    cax = fig.add_axes([0.13, 0.035, 0.22, 0.014])
+    cb = fig.colorbar(im0, cax=cax, orientation="horizontal")
+    cb.set_label("傾斜角［度］", fontsize=7.5, labelpad=1)
+    cb.ax.tick_params(labelsize=6.5, length=2)
+    fig.text(0.68, 0.035, "赤＝急傾斜地崩壊危険区域（正解）",
+             fontsize=7.5, ha="center")
     fig.savefig(out, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print("  書き出し:", out.name)
