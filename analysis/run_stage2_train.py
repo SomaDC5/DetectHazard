@@ -164,23 +164,36 @@ def auc(y, s):
     return (r[y].sum() - n1 * (n1 + 1) / 2) / (n1 * n0) if n1 and n0 else float("nan")
 
 
-def augment(x):
+def augment(x, jitter=0):
     """左右上下反転と90度回転。かたまりの向きに意味は無いので全部使える。
 
     学習に使えるかたまりが 7,889個しかないので、これが無いと
     297k パラメータの CNN はすぐ過学習する（実測で ep12 が最良）。
+
+    jitter>0 で**窓をずらす**。オーバーラップ学習（8節）の2段目版にあたる。
+    推論では窓をかたまりの重心に合わせるが、タイル外周のかたまりは
+    モザイクの端で切り詰められて中心から外れるので、学習でずらしておくと
+    その変動に強くなる、という狙い。
     """
     if torch.rand(1).item() < 0.5:
         x = torch.flip(x, dims=[-1])
     if torch.rand(1).item() < 0.5:
         x = torch.flip(x, dims=[-2])
     k = int(torch.randint(0, 4, (1,)).item())
-    return torch.rot90(x, k, dims=[-2, -1]) if k else x
+    if k:
+        x = torch.rot90(x, k, dims=[-2, -1])
+    if jitter > 0:
+        n = x.shape[-1]
+        x = torch.nn.functional.pad(x, (jitter,) * 4, mode="replicate")
+        dy = int(torch.randint(0, 2 * jitter + 1, (1,)).item())
+        dx = int(torch.randint(0, 2 * jitter + 1, (1,)).item())
+        x = x[..., dy:dy + n, dx:dx + n]
+    return x
 
 
 def train(cond, name, device, epochs=60, batch_size=128, lr=1e-3,
           patience=12, seed=42, val_frac=0.2, use_augment=False,
-          no_scalar=False, no_logit=False, weight_decay=0.0):
+          no_scalar=False, no_logit=False, weight_decay=0.0, jitter=0):
     f = cache_path(cond.name, "val")
     if not f.exists():
         sys.exit(f"{f} がありません。先に --build を実行してください")
@@ -240,8 +253,8 @@ def train(cond, name, device, epochs=60, batch_size=128, lr=1e-3,
             b = perm[s:s + batch_size]
             opt.zero_grad()
             xb = Xtr[b].to(device)
-            if use_augment:
-                xb = augment(xb)
+            if use_augment or jitter:
+                xb = augment(xb, jitter=jitter)
             out = model(xb, Str[b].to(device))
             loss = lossf(out, Ytr[b].to(device))
             loss.backward()
@@ -303,6 +316,8 @@ def main():
                     help="ロジットを画像(ch5)とスカラーの両方から消す。"
                          "地形と写真の文脈だけで分けられるかの診断")
     ap.add_argument("--weight-decay", type=float, default=0.0)
+    ap.add_argument("--jitter", type=int, default=0,
+                    help="窓をこの画素数までずらす（オーバーラップ学習の2段目版）")
     ap.add_argument("--device", default=None)
     args = ap.parse_args()
 
@@ -322,7 +337,8 @@ def main():
         train(cond, args.name, device, epochs=args.epochs,
               batch_size=args.batch_size, lr=args.lr, patience=args.patience,
               use_augment=args.augment, no_scalar=args.no_scalar,
-              no_logit=args.no_logit, weight_decay=args.weight_decay)
+              no_logit=args.no_logit, weight_decay=args.weight_decay,
+              jitter=args.jitter)
 
 
 if __name__ == "__main__":
