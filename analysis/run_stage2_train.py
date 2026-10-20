@@ -69,7 +69,7 @@ def split_indices(n_hz):
     return idx_train, idx_val, idx_test
 
 
-def cache_path(cond_name, split, wide=False, lu=False, union=None):
+def cache_path(cond_name, split, wide=False, lu=False, union=None, agree=False):
     """構成ごとに別ファイルにする。中身が違うのに同じ名前だと混ざる。"""
     d = paths.cache_dir("stage2")
     d.mkdir(parents=True, exist_ok=True)
@@ -79,6 +79,8 @@ def cache_path(cond_name, split, wide=False, lu=False, union=None):
         # 相方が複数なら全部つなげる（順番は呼び出し側で揃える）
         us = [union] if isinstance(union, str) else list(union)
         tag += "__union_" + "_".join(u.replace("FinalFusion_", "") for u in us)
+    if agree:
+        tag += "__agree"
     return d / f"{cond_name}__hiroshima__{split}{tag}.npz"
 
 
@@ -162,7 +164,7 @@ def union_logits(cond2, split, device, batch_hint=500, region="hiroshima"):
 
 @torch.no_grad()
 def build(cond, split, device, batch_hint=500, wide=False, lu=False,
-          pkl_override=None, union_cond=None):
+          pkl_override=None, union_cond=None, agree=False):
     """1段目を走らせて、かたまりごとの切り出し・スカラー・ラベルを作る。
 
     union_cond を渡すと**和集合**を1段目にする（展望 21）。
@@ -200,6 +202,14 @@ def build(cond, split, device, batch_hint=500, wide=False, lu=False,
         stage2.set_wide_channels(lu)
         print(f"  広域の枝あり（{stage2.N_WIDE_CH}ch"
               f"{'・土地利用こみ' if lu else ''}）")
+    # 合意数チャネル（ch7）。和集合でないと全画素1になって情報が無い
+    if agree and not u_list:
+        sys.exit("--agree は --union-with と一緒に使ってください"
+                 "（単独では合意数が常に1で情報がありません）")
+    stage2.set_agree_channel(agree)
+    if agree:
+        print(f"  合意数チャネルあり（{1 + len(u_list)}本中いくつが陽性か / "
+              f"{1 + len(u_list)}）→ 入力 {stage2.N_CH}ch")
     C, WD, S, Y, T, B = [], [], [], [], [], []
     t0 = time.time()
     for n, k in enumerate(tiles):
@@ -236,6 +246,7 @@ def build(cond, split, device, batch_hint=500, wide=False, lu=False,
         ws = np.maximum(ws, 1e-6)
         prob, logit = wp / ws, wl / ws
         pred = prob > 0.5
+        n_pos = pred.astype(np.float32)        # 合意数（まず自分の分）
         for u_logit, u_nos in u_packs:
             # タイルの並びが pkl 間で同じことを確かめる。
             # ずれていたら無関係なタイルを重ねることになる
@@ -245,6 +256,8 @@ def build(cond, split, device, batch_hint=500, wide=False, lu=False,
             lg2, pd2 = u_logit[k]
             logit = np.maximum(logit, lg2)   # OR は max(ロジット) と同じ
             pred = pred | pd2
+            n_pos = n_pos + pd2.astype(np.float32)
+        ag = (n_pos / (1 + len(u_packs))) if agree else None
         gt = prep_mask(ds, k)
 
         lab, sizes = label_instances(pred, 8, 10)
@@ -256,10 +269,12 @@ def build(cond, split, device, batch_hint=500, wide=False, lu=False,
                 raise RuntimeError("土地利用こみを指定しましたが pkl に LandUse が"
                                    "ありません。*_lu.pkl の条件を指定してください")
             crops, wd, scal, ids = stage2.extract_tile(
-                D, A, logit, pred, lab, sizes, wide=True, lu_mos=lu_mos)
+                D, A, logit, pred, lab, sizes, wide=True, lu_mos=lu_mos,
+                agree=ag)
             WD.append(wd.astype(np.float16))
         else:
-            crops, scal, ids = stage2.extract_tile(D, A, logit, pred, lab, sizes)
+            crops, scal, ids = stage2.extract_tile(D, A, logit, pred, lab, sizes,
+                                                   agree=ag)
 
         gl, gs = label_instances(gt, 8, 10)
         if len(gs):
@@ -278,7 +293,7 @@ def build(cond, split, device, batch_hint=500, wide=False, lu=False,
             print(f"    {n}/{len(tiles)}  {el:.0f}秒", end="\r", flush=True)
 
     out = cache_path(cond.name, split, wide, lu,
-                     union=[c2.name for c2 in u_list] or None)
+                     union=[c2.name for c2 in u_list] or None, agree=agree)
     C = np.concatenate(C); S = np.concatenate(S)
     Y = np.concatenate(Y); T = np.concatenate(T); B = np.concatenate(B)
     kw = {"wide": np.concatenate(WD)} if wide else {}
@@ -330,8 +345,9 @@ def augment(x, jitter=0):
 def train(cond, name, device, epochs=60, batch_size=128, lr=1e-3,
           patience=12, seed=42, split_seed=42, val_frac=0.2, use_augment=False,
           no_scalar=False, no_logit=False, weight_decay=0.0, jitter=0,
-          wide=False, lu=False, no_narrow=False, union=None):
-    f = cache_path(cond.name, "val", wide, lu, union=union)
+          wide=False, lu=False, no_narrow=False, union=None, agree=False):
+    stage2.set_agree_channel(agree)
+    f = cache_path(cond.name, "val", wide, lu, union=union, agree=agree)
     if not f.exists():
         sys.exit(f"{f} がありません。先に --build を実行してください")
     z = np.load(f)
@@ -383,7 +399,11 @@ def train(cond, name, device, epochs=60, batch_size=128, lr=1e-3,
               "（地形と写真だけで分けられるかの診断）")
 
     torch.manual_seed(seed)
+    # **in_ch は必ず明示する。** Stage2Net の既定値 in_ch=N_CH は
+    # 定義時に評価されるので、set_agree_channel() では切り替わらない
+    # （wide_ch と同じ扱いにする）。
     model = stage2.Stage2Net(
+        in_ch=stage2.N_CH,
         wide_ch=stage2.N_WIDE_CH if wide else 0).to(device)
     print(f"Stage2Net パラメータ {stage2.n_params(model):,}")
     opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
@@ -456,7 +476,8 @@ def train(cond, name, device, epochs=60, batch_size=128, lr=1e-3,
                 "val_auc": float(best), "base_auc": float(base),
                 "stage1": cond.name, "crop": stage2.CROP,
                 "wide_ch": stage2.N_WIDE_CH if wide else 0,
-                "wide": bool(wide), "landuse": bool(lu)}, out)
+                "wide": bool(wide), "landuse": bool(lu),
+                "in_ch": stage2.N_CH, "agree": bool(agree)}, out)
     print("重みを保存:", out)
     return out
 
@@ -492,6 +513,8 @@ def main():
                          "hiroshima_sam_apm_lu.pkl を指定する")
     ap.add_argument("--jitter", type=int, default=0,
                     help="窓をこの画素数までずらす（オーバーラップ学習の2段目版）")
+    ap.add_argument("--agree", action="store_true",
+                    help="合意数チャネル（ch7）を足す。--union-with が必須。展望 24")
     ap.add_argument("--union-with", nargs="*", default=None,
                     help="和集合にする相方の条件名（展望 21）。"
                          "ロジットは要素ごとの max、予測は OR")
@@ -516,7 +539,7 @@ def main():
             build(cond, sp, device, wide=args.wide, lu=args.landuse,
                   pkl_override=args.pkl,
                   union_cond=[get(u) for u in args.union_with]
-                  if args.union_with else None)
+                  if args.union_with else None, agree=args.agree)
     if args.train:
         print(f"\n--- 2段目を学習: {args.name} ---")
         train(cond, args.name, device, epochs=args.epochs,
@@ -526,7 +549,7 @@ def main():
               jitter=args.jitter, wide=args.wide, lu=args.landuse,
               no_narrow=args.no_narrow,
               seed=args.seed, split_seed=args.split_seed,
-              union=args.union_with)
+              union=args.union_with, agree=args.agree)
 
 
 if __name__ == "__main__":

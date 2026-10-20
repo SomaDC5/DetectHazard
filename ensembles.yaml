@@ -254,3 +254,28 @@ postprocess:
     feature: stage2
     model: Stage2_Union3_s1
     threshold: 0.45
+
+  Post_Union3Agree_Stage2:
+    label: 3本の和集合 + 合意数チャネル + OL推論 + 2段目CNN
+    note: >
+      展望_再現率をどう上げるか.md 24。**この研究の最良値。**
+      和集合のロジットは要素ごとの max なので、3本全部が強く言った箇所と
+      1本だけが言った箇所が同じ値になる。本数は max から復元できない。
+      そこで ch7 に「陽性にしたモデル数 / 全モデル数」を足した。
+      かたまりごとの平均合意数は 的中 0.8015 対 外れ 0.4285 で、
+      **単体の AUC 0.8220 がロジット最大値単体 0.8191 を上回る。**
+      実測 広島 箇所F 0.7784（シード3本の平均。合意数なしの 0.7705 を +0.0079
+      上回り、帯が重ならない。6chの最大 0.7716 < 7chの最小 0.7774）。
+      2段目の検証AUC は 0.8350〜0.8355（合意数なし 0.8242〜0.8252）。
+      **14.3「何を足しても情報が重複する」の例外である。**
+      広域と土地利用は画像の別の場所・別のレイヤなので1段目が既に見ているが、
+      合意数は**モデル間の食い違い**で、1本のモデルの中には存在しない量である。
+      島根は未測定。
+    base: FinalFusion_SAM_APM_OverlapTrain
+    union_with:
+      - FinalFusion_DEM_APM_OverlapTrain
+      - FinalFusion_SAM_APM_LU_OverlapTrain
+    inference: オーバーラップ
+    feature: stage2
+    model: Stage2_Union3Agree_s1
+    threshold: 0.50
