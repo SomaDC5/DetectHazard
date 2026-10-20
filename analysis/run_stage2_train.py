@@ -75,8 +75,10 @@ def cache_path(cond_name, split, wide=False, lu=False, union=None):
     d.mkdir(parents=True, exist_ok=True)
     tag = "" if not wide else ("__wide_lu" if lu else "__wide")
     if union:
-        # 和集合は中身が別物なので必ず別ファイルにする
-        tag += "__union_" + union.replace("FinalFusion_", "")
+        # 和集合は中身が別物なので必ず別ファイルにする。
+        # 相方が複数なら全部つなげる（順番は呼び出し側で揃える）
+        us = [union] if isinstance(union, str) else list(union)
+        tag += "__union_" + "_".join(u.replace("FinalFusion_", "") for u in us)
     return d / f"{cond_name}__hiroshima__{split}{tag}.npz"
 
 
@@ -117,16 +119,22 @@ def union_logits(cond2, split, device, batch_hint=500, region="hiroshima"):
     out, nos = {}, {}
     t0 = time.time()
     for n, k in enumerate(tiles):
-        D, A, _, _ = mosaic(ds, cell, gi, gj, k)
-        dems, airs = [], []
+        D, A, _, LU = mosaic(ds, cell, gi, gj, k)
+        dems, airs, lus = [], [], []
         for dy, dx in OFFSETS:
             r, c = 128 + dy, 128 + dx
             dems.append(D[r:r + 128, c:c + 128])
             airs.append(A[r:r + 128, c:c + 128])
+            if LU is not None:
+                lus.append(LU[r:r + 128, c:c + 128])
         dem = torch.from_numpy(np.stack(dems)[:, None]).float().to(device)
         air = (torch.from_numpy(np.stack(airs).transpose(0, 3, 1, 2))
                .float().to(device) / 255.0)
-        lo = model(dem, air)[:, 0]
+        # **pkl に土地利用があるかではなく、モデルが3入力かで決める**
+        # （build と同じ判定。_lu.pkl を2入力の条件で読むと落ちる）
+        extra = ([_landuse.onehot_torch(np.stack(lus), device=device)]
+                 if (LU is not None and minputs.needs_landuse(cond2)) else [])
+        lo = model(dem, air, *extra)[:, 0]
         pr = torch.sigmoid(lo).cpu().numpy()
         lg = lo.cpu().numpy()
         wp = np.zeros((128, 128), np.float32)
@@ -165,9 +173,12 @@ def build(cond, split, device, batch_hint=500, wide=False, lu=False,
     # 土地利用を2段目に入れるときは、1段目の pkl に LandUse が無いことがある。
     # **1段目のモデルは触らない**（SAM+APM しか使わない）ので、
     # 同じタイル並びで LandUse を持つ pkl に差し替えてよい。
-    # 和集合の相方は、こちらの pkl を読む前に済ませて解放する（メモリ）
-    u_logit, u_nos = (union_logits(union_cond, split, device)
-                      if union_cond is not None else (None, None))
+    # 和集合の相方は、こちらの pkl を読む前に済ませて解放する（メモリ）。
+    # 相方は複数でよい。1本ずつ読んで解放するので同時には1つしか持たない。
+    u_list = ([] if union_cond is None else
+              ([union_cond] if not isinstance(union_cond, (list, tuple))
+               else list(union_cond)))
+    u_packs = [union_logits(c2, split, device) for c2 in u_list]
 
     pkl = dataset_path("Hiroshima",
                        pkl_override or cond.pkl_for("Hiroshima"))
@@ -225,8 +236,8 @@ def build(cond, split, device, batch_hint=500, wide=False, lu=False,
         ws = np.maximum(ws, 1e-6)
         prob, logit = wp / ws, wl / ws
         pred = prob > 0.5
-        if u_logit is not None:
-            # タイルの並びが2つの pkl で同じことを確かめる。
+        for u_logit, u_nos in u_packs:
+            # タイルの並びが pkl 間で同じことを確かめる。
             # ずれていたら無関係なタイルを重ねることになる
             assert k in u_logit, f"タイル {k} が相方に無い"
             assert u_nos[k] == int(ds.No[k]), (
@@ -267,7 +278,7 @@ def build(cond, split, device, batch_hint=500, wide=False, lu=False,
             print(f"    {n}/{len(tiles)}  {el:.0f}秒", end="\r", flush=True)
 
     out = cache_path(cond.name, split, wide, lu,
-                     union=union_cond.name if union_cond else None)
+                     union=[c2.name for c2 in u_list] or None)
     C = np.concatenate(C); S = np.concatenate(S)
     Y = np.concatenate(Y); T = np.concatenate(T); B = np.concatenate(B)
     kw = {"wide": np.concatenate(WD)} if wide else {}
@@ -481,7 +492,7 @@ def main():
                          "hiroshima_sam_apm_lu.pkl を指定する")
     ap.add_argument("--jitter", type=int, default=0,
                     help="窓をこの画素数までずらす（オーバーラップ学習の2段目版）")
-    ap.add_argument("--union-with", default=None,
+    ap.add_argument("--union-with", nargs="*", default=None,
                     help="和集合にする相方の条件名（展望 21）。"
                          "ロジットは要素ごとの max、予測は OR")
     ap.add_argument("--seed", type=int, default=42,
@@ -504,7 +515,8 @@ def main():
             print(f"\n--- かたまりデータを作る: {sp} ---")
             build(cond, sp, device, wide=args.wide, lu=args.landuse,
                   pkl_override=args.pkl,
-                  union_cond=get(args.union_with) if args.union_with else None)
+                  union_cond=[get(u) for u in args.union_with]
+                  if args.union_with else None)
     if args.train:
         print(f"\n--- 2段目を学習: {args.name} ---")
         train(cond, args.name, device, epochs=args.epochs,

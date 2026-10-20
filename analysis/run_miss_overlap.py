@@ -1,44 +1,36 @@
 # -*- coding: utf-8 -*-
-"""見逃しは条件をまたいで同じ箇所か。和集合にすると再現率はどこまで上がるか。
+"""和集合アンサンブル。何本足すとどこまで箇所Recall が上がるか。
 
-なぜ必要か（展望_再現率をどう上げるか.md 21）
---------------------------------------------
-`20` でロジット空間の損失が失敗し、`19.5` で残る行き先が
-「刈り取りの精度」と「1段目の箇所Recall」の2つに絞れた。
-1段目の箇所Recall を上げる手段として、**入力の違う2条件の和集合**がある。
-
-**和集合は箇所Recall を必ず上げるか維持する。** `19.4` のとおり
-
+なぜ和集合なのか（展望_再現率をどう上げるか.md 21・22）
+------------------------------------------------------
     cov_g = |g ∩ (予測の和集合)| / |g|
 
 は予測の画素の和集合にしか依存しないので、マスクを OR で重ねると
-cov_g は単調に増える → tp_gt は減らない → **箇所Recall は下がらない。**
-刈り取りの天井 2R/(1+R) もそのぶん上がる。
+**箇所Recall は下がりえない。** 刈り取りの天井 2R/(1+R) もそのぶん上がる。
+`9` の確率平均アンサンブル（AND 寄り。断片化して失敗）とは逆向きである。
 
-**これは `9` で測ったアンサンブルとは別物である。**
-あれは確率の平均（AND 寄り）で、`Ens_OverlapPair2` は断片化して失敗した
-（かたまり 10,312個、面積比 1.133）。**和集合は OR なので逆向き。**
-
-成否は「見逃しが条件をまたいで重なっているか」で決まる。
-重なっていれば和集合にしても何も拾えない。
+**マスクの OR は max(ロジット) > 0 と同じ**なので、刈り取りに渡す
+logit_max が自然に定まる。
 
 やること
 --------
-2条件のオーバーラップ推論を回し、正解のかたまりごとに被覆率を出す。
+指定した条件すべてのオーバーラップ推論を回し、
 
-  ・各条件の 0画素の見逃し（被覆ちょうど0）の集合を比べる
-  ・和集合マスクでの箇所R と、刈り取りの天井を出す
-  ・代金（予測画素がどれだけ増えるか）も出す
+  ・各条件の 箇所R と 0画素の見逃し
+  ・**貪欲に1本ずつ足して**、箇所R がどこまで伸びるか（折り返しを探す）
+  ・最後の和集合で刈り取りまで通す（全タイル版と A/B 版）
 
 使い方
 ------
     python analysis/run_miss_overlap.py
+    python analysis/run_miss_overlap.py --conditions A B C
     python analysis/run_miss_overlap.py --region shimane
 """
 
 from __future__ import annotations
 
 import argparse
+import itertools
 import os
 import sys
 from pathlib import Path
@@ -54,29 +46,27 @@ from analysis.run_overlap_prune import infer as ol_infer        # noqa: E402
 from dc5lib.device import pick_device                           # noqa: E402
 from dc5lib.registry import get                                 # noqa: E402
 
-PAIR = ["FinalFusion_SAM_APM_OverlapTrain", "FinalFusion_DEM_APM_OverlapTrain"]
+DEFAULT = ["FinalFusion_SAM_APM_OverlapTrain",
+           "FinalFusion_DEM_APM_OverlapTrain",
+           "FinalFusion_SAM_APM_LU_OverlapTrain",
+           "FinalFusion_SAM_APM_OL_LogitHinge"]
 COV_GT = 0.5
 
 
-def per_blob(GT, PD):
-    """正解のかたまりごとに (タイル番号, 面積, 被覆率) を並べる。
-
-    タイルの並びは両条件で同じ（同じ split・同じ bg_ratio）なので、
-    行の順番がそのまま対応づけになる。
-    """
-    area, cov, tile = [], [], []
-    for i, (g, p) in enumerate(zip(GT, PD)):
+def coverage(GT, PD):
+    """正解のかたまりごとの被覆率。順番はタイル順・かたまり順で固定。"""
+    cov = []
+    for g, p in zip(GT, PD):
         for r in instances.per_gt_instance(g.astype(np.uint8), p.astype(np.uint8)):
-            area.append(r["gt_area"]); cov.append(r["coverage"]); tile.append(i)
-    return np.array(tile), np.array(area), np.array(cov)
+            cov.append(r["coverage"])
+    return np.asarray(cov)
 
 
 def f_value(r, p):
     return 2 * r * p / (r + p) if (r + p) > 0 else 0.0
 
 
-
-def prune_curve(gts, PD, LG, label, qs=(0.0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5)):
+def prune_curve(gts, PD, LG, label, qs=(0.0, 0.1, 0.2, 0.3, 0.4, 0.5)):
     """かたまりごとの logit_max で下位を捨てたときの箇所R/P/F。13.1 と同じ形。"""
     from analysis.run_overlap_prune import blob_table, prune, score
     tb = blob_table(gts, PD, LG)
@@ -84,9 +74,9 @@ def prune_curve(gts, PD, LG, label, qs=(0.0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5)):
     print(f"\n--- {label}")
     print(f"  予測したかたまり {len(tb):,}（的中 {n_tp:,} / 外れ "
           f"{len(tb)-n_tp:,} = {100*(len(tb)-n_tp)/len(tb):.1f}%）")
-    R0, P0, F0, n0 = score(gts, PD)
-    print(f"  刈り取り前  箇所R {R0:.4f} / P {P0:.4f} / F {F0:.4f}")
-    print(f"  完璧な刈り取りの上限  箇所F {2*R0/(R0+1):.4f}")
+    R0, P0, F0, _ = score(gts, PD)
+    print(f"  刈り取り前  箇所R {R0:.4f} / P {P0:.4f} / F {F0:.4f}"
+          f"   完璧な刈り取りの上限 {2*R0/(R0+1):.4f}")
     print(f"  {'捨てる割合':>10s} {'しきい値':>9s} {'箇所R':>8s} {'箇所P':>8s} {'箇所F':>8s}")
     best = (0.0, F0)
     for q in qs:
@@ -103,26 +93,37 @@ def prune_curve(gts, PD, LG, label, qs=(0.0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5)):
     return best
 
 
-def prune_ab(gts, PD, LG, label, q=0.3, seed=0):
-    """しきい値を A 半分で選び、B 半分で測る。13.1 と同じ作法。"""
+def prune_ab(gts, PD, LG, label, qs=(0.1, 0.2, 0.3, 0.4, 0.5), seed=0):
+    """A 半分で**捨てる割合もしきい値も**選び、B 半分で測る。
+
+    13.1 ではしきい値だけ A で選んで割合は固定していたが、
+    和集合は本数が増えると最良の割合が動く（2本で30%、3本で40%）。
+    **割合まで A で選ばないと、本数の比較が不公平になる。**
+    """
     from analysis.run_overlap_prune import blob_table, prune, score
-    tb = blob_table(gts, PD, LG)
     n = len(gts)
-    rng = np.random.default_rng(seed)
-    order = rng.permutation(n)
-    A, B = set(order[:n // 2].tolist()), set(order[n // 2:].tolist())
-    thr = tb[tb.tile.isin(A)]["logit_max"].quantile(q)
-    Bi = sorted(B)
-    gB = gts[Bi]
-    pB = PD[Bi]
+    order = np.random.default_rng(seed).permutation(n)
+    A = sorted(order[:n // 2].tolist())
+    Bi = sorted(order[n // 2:].tolist())
+    gA, pA, lA = gts[A], PD[A], LG[A]
+    tbA = blob_table(gA, pA, lA)
+    bq, bf = None, -1.0
+    for q in qs:
+        t = tbA["logit_max"].quantile(q)
+        _, _, f, _ = score(gA, prune(pA, tbA[tbA["logit_max"] <= t]))
+        if f > bf:
+            bq, bf = q, f
+    q = bq
+    thr = tbA["logit_max"].quantile(q)
+    gB, pB, lB = gts[Bi], PD[Bi], LG[Bi]
     R0, P0, F0, _ = score(gB, pB)
-    # B 側だけのかたまり表を作り直してから刈る
-    tbB = blob_table(gB, pB, LG[Bi])
+    tbB = blob_table(gB, pB, lB)
     pr = prune(pB, tbB[tbB["logit_max"] <= thr])
     R, P, F, _ = score(gB, pr)
-    print(f"\n--- {label}  A({len(A)}枚)で選び B({len(B)}枚)で測る / 捨てる {100*q:.0f}%")
+    print(f"\n--- {label}  A({len(A)}枚)で選び B({len(Bi)}枚)で測る"
+          f" / A で選んだ割合 {100*q:.0f}%（A の箇所F {bf:.4f}）")
     print(f"  しきい値 {thr:.3f}")
-    print(f"  B 刈る前    箇所R {R0:.4f} / P {P0:.4f} / F {F0:.4f}")
+    print(f"  B 刈る前    箇所F {F0:.4f}")
     print(f"  B 刈った後  箇所R {R:.4f} / P {P:.4f} / F {F:.4f}   正味 {F-F0:+.4f}")
     return F0, F
 
@@ -130,78 +131,75 @@ def prune_ab(gts, PD, LG, label, q=0.3, seed=0):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--region", default="hiroshima", choices=["hiroshima", "shimane"])
+    ap.add_argument("--conditions", nargs="*", default=None)
     ap.add_argument("--device", default=None)
     args = ap.parse_args()
     dev = torch.device(args.device) if args.device else pick_device()
-    print(f"device = {dev}")
+    names = args.conditions or DEFAULT
+    print(f"device = {dev} / 条件 {len(names)}本")
 
-    masks, logits, gts = {}, {}, None
-    for name in PAIR:
+    masks, logits, labels, gts = {}, {}, {}, None
+    for name in names:
         cond = get(name)
+        labels[name] = cond.label
         print(f"\n■ {cond.label}")
         GT, PD, LG = ol_infer(cond, args.region, dev)
-        logits[name] = LG
         if gts is None:
             gts = GT
         else:
-            # 正解は条件に依らないので、ずれていたら対応づけが壊れている
-            assert np.array_equal(gts, GT), "正解マスクが条件間で一致しない"
-        masks[name] = PD
+            assert np.array_equal(gts, GT), f"{name}: 正解マスクが一致しない"
+        masks[name], logits[name] = PD, LG
 
-    A, B = masks[PAIR[0]], masks[PAIR[1]]
-    U = A | B
-    print(f"\n予測画素 {PAIR[0][12:]}: {A.sum():,} / {PAIR[1][12:]}: {B.sum():,} "
-          f"/ 和集合: {U.sum():,}（+{100*(U.sum()/A.sum()-1):.1f}%）")
-
-    out = {}
-    for lab, PD in (("SAM+APM", A), ("DEM+APM", B), ("和集合", U)):
-        t, a, c = per_blob(gts, PD)
-        out[lab] = dict(tile=t, area=a, cov=c)
-
-    n_gt = len(out["SAM+APM"]["cov"])
+    covs = {n: coverage(gts, masks[n]) for n in names}
+    n_gt = len(next(iter(covs.values())))
     print(f"\n正解のかたまり {n_gt:,}")
-    print(f"{'':10s} {'検出(cov>=0.5)':>14s} {'箇所R':>8s} {'落ちた':>8s} {'0画素':>8s} {'天井':>8s}")
-    for lab in ("SAM+APM", "DEM+APM", "和集合"):
-        c = out[lab]["cov"]
-        det = (c >= COV_GT).sum(); R = det / n_gt
-        print(f"{lab:10s} {det:>14,} {R:>8.4f} {int((c<COV_GT).sum()):>8,} "
-              f"{int((c==0).sum()):>8,} {f_value(R,1.0):>8.4f}")
+    print(f"{'条件':44s} {'箇所R':>8s} {'0画素':>8s} {'天井':>8s}")
+    for n in names:
+        c = covs[n]; R = (c >= COV_GT).mean()
+        print(f"{labels[n][:42]:44s} {R:>8.4f} {int((c==0).sum()):>8,} "
+              f"{f_value(R,1.0):>8.4f}")
 
-    ca, cb = out["SAM+APM"]["cov"], out["DEM+APM"]["cov"]
-    za, zb = ca == 0, cb == 0
-    ma, mb = ca < COV_GT, cb < COV_GT
-    print(f"\n=== 0画素の見逃しは重なっているか ===")
-    print(f"  SAM+APM だけ 0画素  {int((za & ~zb).sum()):>6,}")
-    print(f"  DEM+APM だけ 0画素  {int((~za & zb).sum()):>6,}")
-    print(f"  両方 0画素          {int((za & zb).sum()):>6,}")
-    print(f"  どちらも出ている    {int((~za & ~zb).sum()):>6,}")
-    j = (za & zb).sum() / max((za | zb).sum(), 1)
-    print(f"  Jaccard（重なり度） {j:.4f}   1.0 なら完全に同じ箇所")
+    # 2本ずつの重なり（0画素の見逃し）
+    print(f"\n=== 0画素の見逃しの重なり（Jaccard。1.0 なら完全に同じ箇所）===")
+    for a, b in itertools.combinations(names, 2):
+        za, zb = covs[a] == 0, covs[b] == 0
+        print(f"  {a[12:28]:>18s} vs {b[12:28]:<18s} {(za&zb).sum()/max((za|zb).sum(),1):.4f}")
 
-    print(f"\n=== 落ちた箇所（cov<0.5）で見ると ===")
-    print(f"  SAM+APM だけ落ちた  {int((ma & ~mb).sum()):>6,}  ← DEM が拾えている")
-    print(f"  DEM+APM だけ落ちた  {int((~ma & mb).sum()):>6,}  ← SAM が拾えている")
-    print(f"  両方落ちた          {int((ma & mb).sum()):>6,}  ← 和集合でも拾えない")
-    print(f"  Jaccard             {(ma&mb).sum()/max((ma|mb).sum(),1):.4f}")
+    # 貪欲に1本ずつ足す
+    print(f"\n=== 貪欲に足す（毎回いちばん箇所R が上がる1本を選ぶ）===")
+    chosen, rest = [names[0]], [n for n in names[1:]]
+    U = masks[names[0]].copy(); LU = logits[names[0]].copy()
+    R = (covs[names[0]] >= COV_GT).mean()
+    print(f"  1本 {labels[names[0]][:36]:38s} 箇所R {R:.4f}  天井 {f_value(R,1.0):.4f}"
+          f"  予測画素 {U.sum():,}")
+    hist = [(1, names[0], R, f_value(R, 1.0), int(U.sum()))]
+    while rest:
+        best = None
+        for n in rest:
+            u = U | masks[n]
+            r = (coverage(gts, u) >= COV_GT).mean()
+            if best is None or r > best[1]:
+                best = (n, r, u)
+        n, r, u = best
+        U = u; LU = np.maximum(LU, logits[n])
+        chosen.append(n); rest.remove(n)
+        print(f"  {len(chosen)}本 + {labels[n][:34]:36s} 箇所R {r:.4f}"
+              f" ({r-R:+.4f})  天井 {f_value(r,1.0):.4f}  予測画素 {u.sum():,}")
+        hist.append((len(chosen), n, r, f_value(r, 1.0), int(u.sum())))
+        R = r
 
-    # --- ロジットの要素ごとの max で和集合を作る。
-    # マスクの OR は max(a,b) > 0 と厳密に同じなので、
-    # 刈り取りに渡す logit_max が自然に定まる。
-    LU = np.maximum(logits[PAIR[0]], logits[PAIR[1]])
-    assert np.array_equal(U, LU > 0.0) or True   # 二値化は確率側なので厳密一致はしない
-    prune_curve(gts, A, logits[PAIR[0]], "SAM+APM 単独")
-    prune_curve(gts, U, LU, "和集合（ロジット max）")
-    print(chr(10) + "="*62)
-    print("公正な比較: しきい値を別タイルで選ぶ")
-    prune_ab(gts, A, logits[PAIR[0]], "SAM+APM 単独", q=0.3)
-    prune_ab(gts, U, LU, "和集合（ロジット max）", q=0.3)
+    # 和集合の本数ごとに刈り取りまで通す
+    print(f"\n{'='*64}\n本数ごとに刈り取りまで通す")
+    U2 = masks[chosen[0]].copy(); L2 = logits[chosen[0]].copy()
+    for i, n in enumerate(chosen):
+        if i > 0:
+            U2 = U2 | masks[n]
+            L2 = np.maximum(L2, logits[n])
+        prune_curve(gts, U2, L2, f"{i+1}本の和集合")
+        prune_ab(gts, U2, L2, f"{i+1}本の和集合")
 
-    rows = []
-    for lab in ("SAM+APM", "DEM+APM", "和集合"):
-        c = out[lab]["cov"]; R = (c >= COV_GT).mean()
-        rows.append(dict(条件=lab, 箇所R=R, 落ちた=int((c < COV_GT).sum()),
-                         ゼロ画素=int((c == 0).sum()), 刈り取り天井=f_value(R, 1.0)))
-    pd.DataFrame(rows).to_csv(
+    pd.DataFrame(hist, columns=["本数", "足した条件", "箇所R", "刈り取り天井",
+                                "予測画素"]).to_csv(
         os.path.join(config.REPORT_DIR, f"miss_overlap_{args.region}.csv"),
         index=False, encoding="utf-8-sig")
     print(f"\n{os.path.join(config.REPORT_DIR, f'miss_overlap_{args.region}.csv')}")

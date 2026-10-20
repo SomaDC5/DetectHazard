@@ -60,8 +60,10 @@ def run(stage1, model2, split, device, region="hiroshima", wide_ch=0,
     """
     dirname = {"hiroshima": "Hiroshima", "shimane": "Shimane"}[region]
     # 和集合の相方は、こちらの pkl を読む前に済ませて解放する（メモリ）
-    u_logit, u_nos = ((union_logits(union_cond, split, device, region=region))
-                      if union_cond is not None else (None, None))
+    u_list = ([] if union_cond is None else
+              ([union_cond] if not isinstance(union_cond, (list, tuple))
+               else list(union_cond)))
+    u_packs = [union_logits(c2, split, device, region=region) for c2 in u_list]
     pkl = dataset_path(dirname, stage1.pkl_for(dirname))
     print(f"  読み込み: {pkl.name}")
     ds = load_pkl(pkl)
@@ -116,7 +118,7 @@ def run(stage1, model2, split, device, region="hiroshima", wide_ch=0,
         ws = np.maximum(ws, 1e-6)
         logit = wl / ws
         pred = (wp / ws) > 0.5
-        if u_logit is not None:
+        for u_logit, u_nos in u_packs:
             assert k in u_logit, f"タイル {k} が相方に無い"
             assert u_nos[k] == int(ds.No[k]), (
                 f"タイル番号が一致しない: {u_nos[k]} != {int(ds.No[k])}")
@@ -171,7 +173,7 @@ def main():
     ap.add_argument("--region", default="hiroshima", choices=["hiroshima", "shimane"])
     ap.add_argument("--thr", type=float, default=None,
                     help="しきい値。省略すると掃いて表にする")
-    ap.add_argument("--union-with", default=None,
+    ap.add_argument("--union-with", nargs="*", default=None,
                     help="和集合にする相方の条件名（展望 21）。"
                          "学習時と同じものを指定すること")
     ap.add_argument("--by", default="keep", choices=["keep", "logit_max"],
@@ -217,7 +219,8 @@ def main():
     print(f"device {device}")
 
     GT, PB, rows = run(stage1, m2, args.split, device, args.region,
-                       union_cond=get(args.union_with) if args.union_with else None,
+                       union_cond=[get(u) for u in args.union_with]
+                       if args.union_with else None,
                        wide_ch=wide_ch, use_lu=use_lu)
     R0, P0, F0, n0 = score(GT, PB)
     print(f"\nかたまり {len(rows)}")
