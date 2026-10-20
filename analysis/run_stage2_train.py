@@ -222,7 +222,7 @@ def augment(x, jitter=0):
 
 
 def train(cond, name, device, epochs=60, batch_size=128, lr=1e-3,
-          patience=12, seed=42, val_frac=0.2, use_augment=False,
+          patience=12, seed=42, split_seed=42, val_frac=0.2, use_augment=False,
           no_scalar=False, no_logit=False, weight_decay=0.0, jitter=0,
           wide=False, lu=False, no_narrow=False):
     f = cache_path(cond.name, "val", wide, lu)
@@ -240,12 +240,15 @@ def train(cond, name, device, epochs=60, batch_size=128, lr=1e-3,
 
     # タイル単位で分ける。同じタイルのかたまりが両側に跨がらないように
     tiles = np.unique(T)
-    rng = np.random.default_rng(seed)
+    # タイル分割は split_seed、モデル初期化とシャッフルは seed。
+    # 分けておくと「分割のゆらぎ」と「初期化のゆらぎ」を切り分けられる。
+    rng = np.random.default_rng(split_seed)
     rng.shuffle(tiles)
     n_val = int(len(tiles) * val_frac)
     val_tiles = set(tiles[:n_val].tolist())
     is_val = np.array([t in val_tiles for t in T])
-    print(f"タイル {len(tiles)} → 学習 {len(tiles) - n_val} / 検証 {n_val}")
+    print(f"タイル {len(tiles)} → 学習 {len(tiles) - n_val} / 検証 {n_val}"
+          f"（分割 seed={split_seed} / 初期化 seed={seed}）")
     print(f"かたまり 学習 {int((~is_val).sum()):,} / 検証 {int(is_val.sum()):,}")
     assert not (set(T[is_val].tolist()) & set(T[~is_val].tolist())), "タイルが跨がっている"
 
@@ -383,6 +386,11 @@ def main():
                          "hiroshima_sam_apm_lu.pkl を指定する")
     ap.add_argument("--jitter", type=int, default=0,
                     help="窓をこの画素数までずらす（オーバーラップ学習の2段目版）")
+    ap.add_argument("--seed", type=int, default=42,
+                    help="モデル初期化とバッチ順。ゆらぎ幅を測るとき振る")
+    ap.add_argument("--split-seed", type=int, default=42,
+                    help="学習/検証のタイル分割。既定で固定しておくと "
+                         "分割のゆらぎを混ぜずに初期化のゆらぎだけ測れる")
     ap.add_argument("--device", default=None)
     args = ap.parse_args()
 
@@ -405,7 +413,8 @@ def main():
               use_augment=args.augment, no_scalar=args.no_scalar,
               no_logit=args.no_logit, weight_decay=args.weight_decay,
               jitter=args.jitter, wide=args.wide, lu=args.landuse,
-              no_narrow=args.no_narrow)
+              no_narrow=args.no_narrow,
+              seed=args.seed, split_seed=args.split_seed)
 
 
 if __name__ == "__main__":
