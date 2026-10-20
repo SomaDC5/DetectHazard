@@ -34,7 +34,7 @@ from analysis.run_instance_eval import SETTINGS                         # noqa: 
 from analysis.run_overlap_eval import (OFFSETS, cos_window, grid_index,  # noqa: E402
                                        mosaic, prep_mask)
 from analysis.run_overlap_prune import full_scores, score               # noqa: E402
-from analysis.run_stage2_train import split_indices                     # noqa: E402
+from analysis.run_stage2_train import split_indices, union_logits       # noqa: E402
 from dc5lib import inputs as minputs  # noqa: E402
 from dc5lib import landuse as _landuse  # noqa: E402
 from dc5lib import paths, stage2                                        # noqa: E402
@@ -49,12 +49,19 @@ THRS = [0.0, 0.2, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.7]
 
 @torch.no_grad()
 def run(stage1, model2, split, device, region="hiroshima", wide_ch=0,
-        use_lu=False):
+        use_lu=False, union_cond=None):
     """1段目を走らせ、かたまりごとに2段目の「残す確率」を付ける。
 
     戻り値 (GT, PB, rows) で rows は tile / blob / keep を持つ DataFrame。
+
+    union_cond を渡すと1段目を**和集合**にする（展望 21）。
+    ロジットは要素ごとの max、予測は OR。学習側（run_stage2_train.build）と
+    同じ作り方にしないと、2段目が見たものと違うものを渡すことになる。
     """
     dirname = {"hiroshima": "Hiroshima", "shimane": "Shimane"}[region]
+    # 和集合の相方は、こちらの pkl を読む前に済ませて解放する（メモリ）
+    u_logit, u_nos = ((union_logits(union_cond, split, device, region=region))
+                      if union_cond is not None else (None, None))
     pkl = dataset_path(dirname, stage1.pkl_for(dirname))
     print(f"  読み込み: {pkl.name}")
     ds = load_pkl(pkl)
@@ -109,6 +116,13 @@ def run(stage1, model2, split, device, region="hiroshima", wide_ch=0,
         ws = np.maximum(ws, 1e-6)
         logit = wl / ws
         pred = (wp / ws) > 0.5
+        if u_logit is not None:
+            assert k in u_logit, f"タイル {k} が相方に無い"
+            assert u_nos[k] == int(ds.No[k]), (
+                f"タイル番号が一致しない: {u_nos[k]} != {int(ds.No[k])}")
+            lg2, pd2 = u_logit[k]
+            logit = np.maximum(logit, lg2)   # OR は max(ロジット) と同じ
+            pred = pred | pd2
         GT[n] = prep_mask(ds, k)
         PB[n] = pred
 
@@ -157,6 +171,9 @@ def main():
     ap.add_argument("--region", default="hiroshima", choices=["hiroshima", "shimane"])
     ap.add_argument("--thr", type=float, default=None,
                     help="しきい値。省略すると掃いて表にする")
+    ap.add_argument("--union-with", default=None,
+                    help="和集合にする相方の条件名（展望 21）。"
+                         "学習時と同じものを指定すること")
     ap.add_argument("--by", default="keep", choices=["keep", "logit_max"],
                     help="何で刈るか。keep=2段目の出力 / "
                          "logit_max=しきい値1本（同じ split で比べるための対照）")
@@ -200,6 +217,7 @@ def main():
     print(f"device {device}")
 
     GT, PB, rows = run(stage1, m2, args.split, device, args.region,
+                       union_cond=get(args.union_with) if args.union_with else None,
                        wide_ch=wide_ch, use_lu=use_lu)
     R0, P0, F0, n0 = score(GT, PB)
     print(f"\nかたまり {len(rows)}")

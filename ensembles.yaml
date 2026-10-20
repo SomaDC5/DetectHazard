@@ -186,3 +186,43 @@ postprocess:
     feature: stage2
     model: Stage2_SAM_OL_v1
     threshold: 0.45
+
+  Post_Union_SAM_DEM_Stage2:
+    label: SAM+APM と DEM+APM の和集合 + OL推論 + 2段目CNN
+    note: >
+      展望_再現率をどう上げるか.md 21〜22。**この研究の最良値。**
+      見逃しは入力の違う2条件で重ならない（0画素の見逃しの Jaccard 0.4766。
+      SAM+APM だけ 0画素 221 / DEM+APM だけ 697 / 両方 836）。
+      そこでマスクを OR で重ねる。**OR は max(ロジット) > 0 と同じ**なので、
+      刈り取りに渡す logit_max が自然に定まる。9節の確率平均アンサンブル
+      （AND寄り。Ens_OverlapPair2 は断片化して失敗）とは逆向きである。
+      箇所R 0.7846 → 0.8328、刈り取りの天井 0.8793 → 0.9088。
+      代金は予測画素 +12.1% だけ。
+      実測 広島 箇所F 0.7639（シード3本の平均。単独 + 2段目の 0.7525 を +0.0114
+      上回り、帯が重ならない。単独の最大 0.7540 < 和集合の最小 0.7599）。
+      島根はしきい値1本で 0.6035（単独 0.5776、+0.0259）。2段目は未測定。
+      しきい値 0.50 は検証split で箇所F が最良になる値として選び、テストで測った。
+      **払う通貨が重要である。** 和集合は適合率で払って再現率を買うので
+      刈り取りと相補（取り分 +0.0394 → +0.0662）。
+      20節のロジットヒンジは逆に再現率で払って適合率を買ったので冗長だった。
+    base: FinalFusion_SAM_APM_OverlapTrain
+    union_with: FinalFusion_DEM_APM_OverlapTrain
+    inference: オーバーラップ
+    feature: stage2
+    model: Stage2_Union_s1
+    threshold: 0.50
+
+  Post_Union_SAM_DEM_Logit:
+    label: SAM+APM と DEM+APM の和集合 + OL推論 + 刈り取り
+    note: >
+      展望_再現率をどう上げるか.md 21。上の 2段目なし版。**学習が1回も要らない。**
+      実測 広島 箇所F 0.7574（別タイルでしきい値を選んだ値。
+      全タイルで選べば 0.7620）/ 島根 0.6035。
+      単独（Post_SAM_OL_Logit30）の 0.7417 / 0.5776 を上回る。
+      これだけで、2段目まで通した単独の最良 0.7525 を超える。
+    base: FinalFusion_SAM_APM_OverlapTrain
+    union_with: FinalFusion_DEM_APM_OverlapTrain
+    inference: オーバーラップ
+    feature: logit_max
+    threshold: 30.345
+    drop_quantile: 0.30

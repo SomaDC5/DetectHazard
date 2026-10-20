@@ -14,6 +14,8 @@
 項目
 ----
     base         後処理を掛ける条件名（experiments/ にあること）
+    union_with   1段目を和集合にする相方の条件名（展望 21）。
+                 ロジットは要素ごとの max、予測は OR。省略時は単独
     inference    通常 / オーバーラップ
     feature      かたまりを並べる特徴量。logit_max / logit_mean / area
     threshold    この値**以下**のかたまりを捨てる（絶対値）
@@ -59,6 +61,7 @@ class PostProcess:
     inference: str = "オーバーラップ"
     drop_quantile: float | None = None
     model: str | None = None          # feature="stage2" のときの重みの名前
+    union_with: str | None = None     # 1段目を和集合にする相方の条件名（展望 21）
     label: str = ""
     note: str = ""
     status: str = "active"
@@ -80,7 +83,8 @@ def all_postprocess(include_excluded=False):
             d = yaml.safe_load(CONFIG.read_text(encoding="utf-8")) or {}
             _cache = []
             known = {"base", "threshold", "feature", "inference",
-                     "drop_quantile", "label", "note", "status", "model"}
+                     "drop_quantile", "label", "note", "status", "model",
+                     "union_with"}
             for name, v in (d.get("postprocess") or {}).items():
                 v = dict(v or {})
                 extra = {k: v.pop(k) for k in list(v) if k not in known}
@@ -119,6 +123,9 @@ def check():
             problems.append(f"後処理 '{p.name}': 同名のアンサンブルがあります")
         if p.base not in conds:
             problems.append(f"後処理 '{p.name}': base '{p.base}' が experiments/ にありません")
+        if p.union_with and p.union_with not in conds:
+            problems.append(f"後処理 '{p.name}': union_with '{p.union_with}' が "
+                            "experiments/ にありません")
         if p.feature not in FEATURES:
             problems.append(f"後処理 '{p.name}': feature '{p.feature}' は未知です"
                             f"（使えるのは {list(FEATURES)}）")
@@ -159,6 +166,8 @@ if __name__ == "__main__":
         print(f"{p.name}{mark}")
         print(f"  {p.display()}")
         print(f"  base       {p.base}")
+        if p.union_with:
+            print(f"  union_with {p.union_with}（和集合。ロジットは max、予測は OR）")
         print(f"  推論       {p.inference}（{INFERENCES[p.inference]}）")
         print(f"  特徴量     {p.feature}（{FEATURES.get(p.feature, '?')}）")
         if p.model:
