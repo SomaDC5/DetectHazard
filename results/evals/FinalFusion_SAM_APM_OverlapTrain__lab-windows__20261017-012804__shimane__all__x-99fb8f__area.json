@@ -1,0 +1,17 @@
+{
+ "condition": "FinalFusion_SAM_APM_OverlapTrain",
+ "eval_id": "FinalFusion_SAM_APM_OverlapTrain__lab-windows__20261017-012804__shimane__all__x-99fb8f__area",
+ "evaluated_at": "2026-10-17T01:28:04",
+ "f1": 0.5736,
+ "machine": "lab-windows",
+ "metric_kind": "面積",
+ "n_tiles": 24569,
+ "note": "run_overlap_eval.py。3x3近傍の9窓・中心重みつき平均",
+ "precision": 0.5618,
+ "recall": 0.586,
+ "region": "shimane",
+ "run_id": "FinalFusion_SAM_APM_OverlapTrain__lab-windows__20261017-012804",
+ "scope": "オーバーラップ",
+ "setting": "",
+ "tileset": "全件"
+}

@@ -131,3 +131,58 @@ ensembles:
       - AttentionUNet_SAM_APM
       - FinalFusion_SAM_APM_OverlapTrain
       - FinalFusion_DEM_APM_OverlapTrain
+
+# ======================================================================
+# 学習済みの重みに「後処理」を掛けた構成。新しい重みは作らない。
+#
+#   評価   python analysis/run_overlap_prune.py --postprocess <名前> --region hiroshima
+#   記録   上に --record を付けると results/evals/ に入り metrics.csv に載る
+#   一覧   python -m dc5lib.postprocess
+#
+# なぜここなのか → dc5lib/postprocess.py の冒頭
+#
+# 項目
+#   base           後処理を掛ける条件名
+#   inference      通常 / オーバーラップ
+#   feature        かたまりを並べる特徴量。logit_max / logit_mean / area
+#   threshold      この値**以下**のかたまりを捨てる。**絶対値で持つ**
+#                  （分位で持つと評価する集合が変わるたびに意味が変わる。
+#                   実測では広島で決めた絶対値がそのまま島根でも効いた）
+#   drop_quantile  threshold をどう選んだかの記録。評価には使わない
+# ======================================================================
+
+postprocess:
+
+  Post_SAM_OL_Logit30:
+    label: SAM+APM OL学習 + OL推論 + 刈り取り
+    note: >
+      展望_再現率をどう上げるか.md 12〜13。シグモイドは的中と外れを分ける情報を
+      捨てている（的中のロジット最大値の中位数 41.3 対 外れ 26.9。σ ではどちらも 1.0）。
+      ロジットを残してオーバーラップ推論し、ロジット最大値が小さいかたまりを捨てる。
+      しきい値は広島の半分のタイル（偶数番）で箇所F が最良になる下位30%として選んだ。
+      実測 広島 箇所F 0.7384（別タイルで測った値。全タイルで選べば 0.7472）/
+      島根 0.5811。**学習は1回も要らない。**
+      しきい値は地域をまたいで動かない（島根で選び直した +0.0263 と、
+      広島の値をそのまま当てた +0.0259 がほぼ同じ）。
+    base: FinalFusion_SAM_APM_OverlapTrain
+    inference: オーバーラップ
+    feature: logit_max
+    threshold: 29.150
+    drop_quantile: 0.30
+
+  Post_SAM_OL_Stage2:
+    label: SAM+APM OL学習 + OL推論 + 2段目CNN
+    note: >
+      展望_再現率をどう上げるか.md 14。WNet の2段目を実装したもの。
+      1段目は凍結し、かたまり周辺 64x64 を 3x3 モザイクから切り出して
+      6ch（傾斜角・写真RGB・混ぜたロジット・対象のかたまりのマスク）と
+      スカラー5つを小さい CNN（0.30M）に入れ、残す確率を出す。
+      学習は検証split のかたまり 9,880個（1段目が重みの更新に使っていないタイル）。
+      しきい値 0.45 は検証split で箇所F が最良になる値として選び、テストで測った。
+      実測 広島 箇所F 0.7535（しきい値1本の 0.7474 を +0.0061 上回る）。
+      学習・評価は analysis/run_stage2_train.py と run_stage2_eval.py。
+    base: FinalFusion_SAM_APM_OverlapTrain
+    inference: オーバーラップ
+    feature: stage2
+    model: Stage2_SAM_OL_v1
+    threshold: 0.45

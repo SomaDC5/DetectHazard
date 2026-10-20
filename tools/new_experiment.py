@@ -32,9 +32,13 @@ import yaml  # noqa: E402
 from dc5lib import paths, registry  # noqa: E402
 from dc5lib.losses import DEFAULTS as LOSS_DEFAULTS  # noqa: E402
 
-SOURCE_CHANNELS = {"DEM": 1, "SAM": 1, "APM": 3, "GEO": 3}
-SOURCE_KEY = {"DEM": "terrain", "SAM": "terrain", "APM": "airphoto", "GEO": "geology"}
-SOURCE_FIELD = {"DEM": "DEM", "SAM": "DEM", "APM": "AirPhoto", "GEO": "Geo"}
+# LU は土地利用（L03-b の9区分 one-hot）。pkl には区分番号1chで入っていて、
+# 読み込み時に one-hot に展開する（dc5lib/landuse.py の CHANNEL_ORDER）
+SOURCE_CHANNELS = {"DEM": 1, "SAM": 1, "APM": 3, "GEO": 3, "LU": 9}
+SOURCE_KEY = {"DEM": "terrain", "SAM": "terrain", "APM": "airphoto",
+              "GEO": "geology", "LU": "landuse"}
+SOURCE_FIELD = {"DEM": "DEM", "SAM": "DEM", "APM": "AirPhoto", "GEO": "Geo",
+                "LU": "LandUse"}
 
 
 def parse_inputs(spec):

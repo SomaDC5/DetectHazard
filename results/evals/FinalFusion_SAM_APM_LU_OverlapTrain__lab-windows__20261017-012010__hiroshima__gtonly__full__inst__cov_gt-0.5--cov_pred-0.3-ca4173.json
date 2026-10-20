@@ -1,0 +1,22 @@
+{
+ "condition": "FinalFusion_SAM_APM_LU_OverlapTrain",
+ "eval_id": "FinalFusion_SAM_APM_LU_OverlapTrain__lab-windows__20261017-012010__hiroshima__gtonly__full__inst__cov_gt-0.5--cov_pred-0.3-ca4173",
+ "evaluated_at": "2026-10-17T01:20:10",
+ "f1": 0.6663,
+ "fn": 3055,
+ "fp": 2763,
+ "machine": "lab-windows",
+ "metric_kind": "箇所",
+ "n_gt_instances": "8977",
+ "n_pred_instances": "8453",
+ "note": "連結性8近傍 / 最小サイズ10px / 二値化0.5",
+ "precision": 0.6731,
+ "recall": 0.6597,
+ "region": "hiroshima",
+ "run_id": "FinalFusion_SAM_APM_LU_OverlapTrain__lab-windows__20261017-012010",
+ "scope": "通常",
+ "setting": "被覆 (cov_gt=0.5, cov_pred=0.3)",
+ "tileset": "警戒のみ",
+ "tp": 5922,
+ "weights_sha256": null
+}

@@ -23,6 +23,7 @@ import pandas as pd  # noqa: E402
 
 from analysis import config, infer  # noqa: E402
 from analysis.data import build_tileset  # noqa: E402
+from dc5lib import inputs as minputs  # noqa: E402
 
 
 def load_reference():
@@ -72,9 +73,11 @@ def main():
 
         for (pkl_path, bg_ratio), group in config.group_by_pkl(todo, region).items():
             need_air = any(c.use_airphoto for c in group)
+            need_lu = any(minputs.needs_landuse(c) for c in group)
             print(f"\n[{region}] {os.path.basename(pkl_path)} を使う条件: "
                   f"{', '.join(c.name for c in group)}")
-            tiles = build_tileset(pkl_path, region, need_air, bg_ratio=bg_ratio)
+            tiles = build_tileset(pkl_path, region, need_air, bg_ratio=bg_ratio,
+                                  need_landuse=need_lu)
 
             for c in group:
                 print(f"  → {c.name}")

@@ -50,6 +50,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from analysis import config, data as adata, instances            # noqa: E402
 from analysis.run_instance_eval import SETTINGS                   # noqa: E402
+from dc5lib import inputs as minputs  # noqa: E402
 from dc5lib.instance_eval import PRIMARY                          # noqa: E402
 from dc5lib.models import build_model_for, load_weights           # noqa: E402
 from dc5lib.registry import get                                   # noqa: E402
@@ -67,8 +68,10 @@ def predict(cond, tiles, device, batch_size=32):
             e = min(s + batch_size, len(tiles.no))
             t = torch.from_numpy(tiles.terrain[s:e]).to(device)
             if cond.use_airphoto:
-                a = torch.from_numpy(np.ascontiguousarray(tiles.air[s:e])).to(device).float() / 255.0
-                logits = model(t, a)
+                logits = model(*minputs.model_args(
+                    cond, t, tiles.air[s:e],
+                    None if tiles.landuse is None else tiles.landuse[s:e],
+                    device=device))
             else:
                 logits = model(t)
             out[s:e] = torch.sigmoid(logits).squeeze(1).cpu().numpy().astype(np.float16)
@@ -225,7 +228,9 @@ def main():
     for pi, (pkl, group) in enumerate(by_pkl.items()):
         print(f"\n読み込み: {os.path.basename(pkl)}")
         tiles = adata.build_tileset(pkl, args.region, any(c.use_airphoto for c in group),
-                                    group[0].bg_ratio, verbose=True)
+                                    group[0].bg_ratio, verbose=True,
+                                    need_landuse=any(minputs.needs_landuse(c)
+                                                     for c in group))
         no = list(tiles.no)
         g = (tiles.mask[:, 0] > 0)
         if ref_no is None:

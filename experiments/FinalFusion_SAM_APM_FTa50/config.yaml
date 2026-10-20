@@ -16,8 +16,7 @@ augment: false
 bg_ratio: 0.0
 status: active
 label: Final SAM+APM 損失 a0.5/b0.5
-note: 損失を適合率側に振った版（FocalTversky alpha=0.5/beta=0.5 = 見逃しと過検出を等価に）。WNet の2段目候補。展望_再現率をどう上げるか.md
-  10.1/10.8
+note: "損失を適合率側に振った版（FocalTversky alpha=0.5/beta=0.5 = 見逃しと過検出を等価に）。手順0の片側。結果は 展望_再現率をどう上げるか.md 11節 — 適合率は買えず（島根では箇所P −0.0328）、WNet の2段目候補にはならなかった。"
 dataset:
   Hiroshima: hiroshima_sam_apm.pkl
   Shimane: shimane_sam_apm.pkl

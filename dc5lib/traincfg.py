@@ -32,6 +32,9 @@ DEFAULTS = {
     "test_size": 0.2,       # 全体から切るテストの割合
     "val_size": 0.25,       # 残り(trainval)から切る検証の割合
     "random_state": 42,
+    # 既存の条件の重みから続けて学習する（追加学習）。None ならゼロから。
+    # 飽和したモデルを損失で動かせるかを安く試すために入れた（展望 18.3）。
+    "init_from": None,
 }
 
 
@@ -48,13 +51,14 @@ class TrainCfg:
     random_state: int
     bg_ratio: float
     arch: str
+    init_from: str | None = None   # 追加学習の出発点にする条件名
     source: dict = field(default_factory=dict)   # 各項目が config 由来か既定か
 
     def describe(self) -> str:
         rows = []
         for k in ("arch", "epochs", "batch_size", "lr", "seed",
                   "early_stop_patience", "test_size", "val_size",
-                  "random_state", "bg_ratio"):
+                  "random_state", "bg_ratio", "init_from"):
             v = getattr(self, k)
             src = self.source.get(k, "既定")
             rows.append(f"  {k:<20}{v!s:<12}({src})")
@@ -63,6 +67,9 @@ class TrainCfg:
         if not self.early_stop_patience:
             tail = ("\n  ※ 早期終了が無効。検証F値が伸びなくても "
                     f"{self.epochs} エポック回り切る")
+        if self.init_from:
+            tail += (f"\n  ※ 追加学習。{self.init_from} の重みから続ける"
+                     "（ゼロからではない）")
         return head + "\n" + "\n".join(rows) + tail
 
 
@@ -87,6 +94,8 @@ def train_cfg(condition) -> TrainCfg:
                     test_size=float(vals["test_size"]),
                     val_size=float(vals["val_size"]),
                     random_state=int(vals["random_state"]),
+                    init_from=(str(vals["init_from"])
+                               if vals["init_from"] else None),
                     source=src)
 
 

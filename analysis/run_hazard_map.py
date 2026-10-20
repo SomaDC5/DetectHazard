@@ -59,6 +59,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from analysis.data import load_pkl                                  # noqa: E402
 from analysis.run_overlap_eval import (DLON, DLAT, OFFSETS, REGION_DIR,  # noqa: E402
                                        cos_window, grid_index, mosaic, prep_mask)
+from dc5lib import inputs as minputs  # noqa: E402
+from dc5lib import landuse as _landuse  # noqa: E402
 from dc5lib import ensembles as ens                                 # noqa: E402
 from dc5lib.device import pick_device                               # noqa: E402
 from dc5lib.models import build_model_for, load_weights             # noqa: E402
@@ -93,7 +95,7 @@ def predict_region(cond, region, overlap, device, verbose=True):
 
     for k in range(n):
         if overlap:
-            D, A, _ = mosaic(ds, cell, gi, gj, k)
+            D, A, _, LU = mosaic(ds, cell, gi, gj, k)
             # **航空写真は条件によって解像度が違う**（*_sam_apm256.pkl は 256px）。
             # 地形量で 64px ずらす窓は、航空写真では ap/128 倍ずらす必要がある。
             # 倍率を掛けないと別の場所を切り出す。
@@ -107,7 +109,12 @@ def predict_region(cond, region, overlap, device, verbose=True):
             if cond.use_airphoto:
                 a = torch.from_numpy(np.ascontiguousarray(
                     airs.transpose(0, 3, 1, 2))).to(device).float() / 255.0
-                logit = model(t, a)
+                # pkl ではなくモデルが3入力かで決める
+                extra = ([_landuse.onehot_torch(
+                    np.stack([LU[TILE + dy:2 * TILE + dy, TILE + dx:2 * TILE + dx]
+                              for dy, dx in OFFSETS]), device=device)]
+                    if (LU is not None and minputs.needs_landuse(cond)) else [])
+                logit = model(t, a, *extra)
             else:
                 logit = model(t)
             p = torch.sigmoid(logit).squeeze(1).cpu().numpy()        # [9,128,128]
@@ -128,7 +135,11 @@ def predict_region(cond, region, overlap, device, verbose=True):
             if cond.use_airphoto:
                 a = np.asarray(ds.AirPhoto[k], np.uint8).transpose(2, 0, 1)[None]
                 a = torch.from_numpy(np.ascontiguousarray(a)).to(device).float() / 255.0
-                logit = model(t, a)
+                # 従来推論（貼り合わせない）経路。土地利用は中央タイルのものだけ
+                extra = ([_landuse.onehot_torch(
+                    np.asarray(ds.LandUse[k], np.uint8)[None], device=device)]
+                    if (hasattr(ds, "LandUse") and minputs.needs_landuse(cond)) else [])
+                logit = model(t, a, *extra)
             else:
                 logit = model(t)
             out[k] = torch.sigmoid(logit).squeeze().cpu().numpy()

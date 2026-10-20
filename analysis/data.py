@@ -59,6 +59,30 @@ def load_pkl(path):
             return _RedirectUnpickler(f).load()
 
 
+
+def _check_landuse_order(ds, pkl_path, verbose=True):
+    """pkl に入っている区分の並びが、いまのコードと同じかを確かめる。
+
+    **ここを飛ばすと黙って別の区分として読まれる。** 区分番号は
+    dc5lib.landuse.CHANNEL_ORDER の添字なので、並びが変わると意味が変わる。
+    （実際に、年次の違うコード表を使って森林を建物用地と読み違えたことがある）
+    """
+    from dc5lib import landuse as _lu
+    order = list(getattr(ds, "LandUseOrder", []) or [])
+    if not order:
+        raise AttributeError(
+            f"{os.path.basename(pkl_path)} に LandUseOrder がありません。"
+            f"区分番号の意味が確かめられないので読みません")
+    if order != list(_lu.CHANNEL_ORDER):
+        raise ValueError(
+            f"{os.path.basename(pkl_path)}: 区分の並びが違います。"
+            f"pkl は {order} / いまのコードは {list(_lu.CHANNEL_ORDER)}。"
+            f"tools/build_landuse_pkl.py で作り直してください")
+    if verbose:
+        cl = getattr(ds, "LandUseCodelist", "?")
+        print(f"  土地利用 {len(order)} 区分（{cl}）を読みます", flush=True)
+
+
 # ------------------------------------------------------------------ 前処理
 def preprocess_mask(mask):
     """学習時と同じマスク前処理。"""
@@ -135,16 +159,22 @@ class TileSet:
     air     : uint8   [N, 3, P, P]      航空写真（なければ None）。P は pkl 次第で
                                         128 のことも 256 のこともある
     mask    : uint8   [N, 1, 128, 128]  前処理済みの正解
+    landuse : uint8   [N, 128, 128]      土地利用の**区分番号**。3入力の条件だけ。
+                                         one-hot ではない（島根全件を9chの
+                                         float32 で持つと 14.5GB になる）。
+                                         バッチごとに展開する。無ければ None
     no      : list    タイル番号
     geo     : list    GeoInfo（左上経度・画素サイズなど）
     max_h / min_h : list  標高の最大・最小（起伏量の算出に使う）
     """
 
     def __init__(self, terrain, air, mask, no, geo, max_h, min_h, region, source,
-                 flags=None):
+                 flags=None, landuse=None):
         self.terrain = terrain
         self.air = air
         self.mask = mask
+        # 3入力目。2入力の条件では None のままなので、既存の呼び出しは変わらない
+        self.landuse = landuse
         self.no = no
         self.geo = geo
         self.max_h = max_h
@@ -158,8 +188,12 @@ class TileSet:
         return len(self.no)
 
 
-def build_tileset(pkl_path, region, need_airphoto, bg_ratio=0.0, verbose=True):
+def build_tileset(pkl_path, region, need_airphoto, bg_ratio=0.0, verbose=True,
+                  need_landuse=False):
     """pkl を1回読んで、その地域の評価用タイル集合を作る。
+
+    need_landuse=True で土地利用（3入力目）も読む。既定は False なので、
+    既存の2入力の条件の呼び出しは何も変わらない。
 
     bg_ratio はノートブックの分割を再現するために要る（hiroshima_test_indices
     の説明を参照）。bg_ratio > 0 の条件では、テスト集合に背景タイルも含まれる。
@@ -224,11 +258,22 @@ def build_tileset(pkl_path, region, need_airphoto, bg_ratio=0.0, verbose=True):
             air = np.empty((n, 3, air_px, air_px), dtype=np.uint8)
     no, geo, max_h, min_h = [], [], [], []
 
+    lu = None
+    if need_landuse:
+        if not hasattr(ds, "LandUse"):
+            raise AttributeError(
+                f"{os.path.basename(pkl_path)} に LandUse がありません。"
+                f"tools/build_landuse_pkl.py で作った pkl を指定してください")
+        _check_landuse_order(ds, pkl_path, verbose)
+        lu = np.empty((n, config.TILE_SIZE, config.TILE_SIZE), dtype=np.uint8)
+
     for k, i in enumerate(sel):
         terrain[k, 0] = np.asarray(ds.DEM[i], dtype=np.float32)
         mask[k, 0] = preprocess_mask(ds.Mask[i])
         if need_airphoto and not air_is_view:
             air[k] = np.transpose(np.asarray(ds.AirPhoto[i], dtype=np.uint8), (2, 0, 1))
+        if lu is not None:
+            lu[k] = np.asarray(ds.LandUse[i], dtype=np.uint8)
         no.append(ds.No[i])
         geo.append(ds.GeoInfo[i])
         max_h.append(ds.Max_H[i])
@@ -238,4 +283,4 @@ def build_tileset(pkl_path, region, need_airphoto, bg_ratio=0.0, verbose=True):
         del ds
     gc.collect()
     return TileSet(terrain, air, mask, no, geo, max_h, min_h, region,
-                   os.path.basename(pkl_path), flags=flags)
+                   os.path.basename(pkl_path), flags=flags, landuse=lu)

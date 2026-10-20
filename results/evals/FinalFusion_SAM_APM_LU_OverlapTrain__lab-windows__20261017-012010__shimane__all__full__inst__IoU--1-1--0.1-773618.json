@@ -1,0 +1,22 @@
+{
+ "condition": "FinalFusion_SAM_APM_LU_OverlapTrain",
+ "eval_id": "FinalFusion_SAM_APM_LU_OverlapTrain__lab-windows__20261017-012010__shimane__all__full__inst__IoU--1-1--0.1-773618",
+ "evaluated_at": "2026-10-17T01:20:10",
+ "f1": 0.5169,
+ "fn": 12680,
+ "fp": 14923,
+ "machine": "lab-windows",
+ "metric_kind": "箇所",
+ "n_gt_instances": "27445",
+ "n_pred_instances": "29688",
+ "note": "連結性8近傍 / 最小サイズ10px / 二値化0.5",
+ "precision": 0.4973,
+ "recall": 0.538,
+ "region": "shimane",
+ "run_id": "FinalFusion_SAM_APM_LU_OverlapTrain__lab-windows__20261017-012010",
+ "scope": "通常",
+ "setting": "IoU厳密1対1 (0.1)",
+ "tileset": "全件",
+ "tp": 14765,
+ "weights_sha256": null
+}

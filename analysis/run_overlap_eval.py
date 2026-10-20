@@ -25,6 +25,8 @@ from scipy.ndimage import gaussian_filter
 from sklearn.model_selection import train_test_split
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from dc5lib import inputs as minputs  # noqa: E402
+from dc5lib import landuse as _landuse  # noqa: E402
 from dc5lib import results as dc5results                      # noqa: E402
 from dc5lib.instance_eval import PRIMARY, InstanceEvaluator    # noqa: E402
 from dc5lib.models import build_model_for, load_weights            # noqa: E402
@@ -67,6 +69,9 @@ def mosaic(ds, cell, gi, gj, k):
     a, b = gi[k], gj[k]
     D = np.zeros((3 * T, 3 * T), np.float32)
     A = np.zeros((3 * ap, 3 * ap, 3), np.uint8)
+    # 土地利用。pkl に無ければ None のまま（2入力の条件では使わない）
+    L = (np.full((3 * T, 3 * T), 255, np.uint8)
+         if hasattr(ds, "LandUse") else None)
     ok = np.zeros((3, 3), bool)
     for p in (-1, 0, 1):
         for q in (-1, 0, 1):
@@ -78,6 +83,8 @@ def mosaic(ds, cell, gi, gj, k):
             D[r:r + T, c:c + T] = np.asarray(ds.DEM[n], np.float32)
             ar, ac = (1 - q) * ap, (p + 1) * ap
             A[ar:ar + ap, ac:ac + ap] = np.asarray(ds.AirPhoto[n], np.uint8)
+            if L is not None:
+                L[r:r + T, c:c + T] = np.asarray(ds.LandUse[n], np.uint8)
     for p in (-1, 0, 1):
         for q in (-1, 0, 1):
             if ok[p + 1, q + 1]:
@@ -88,7 +95,11 @@ def mosaic(ds, cell, gi, gj, k):
             cen_a = A[ap:2 * ap, ap:2 * ap]
             D[r:r + T, c:c + T] = cen_d[::(-1 if q else 1), ::(-1 if p else 1)]
             A[ar:ar + ap, ac:ac + ap] = cen_a[::(-1 if q else 1), ::(-1 if p else 1)]
-    return D, A, bool(ok.all())
+            if L is not None:
+                cen_l = L[T:2 * T, T:2 * T]
+                L[r:r + T, c:c + T] = cen_l[::(-1 if q else 1), ::(-1 if p else 1)]
+    # 戻り値は4つ。L は土地利用が無ければ None
+    return D, A, bool(ok.all()), L
 
 
 def target_tiles(ds, region, bg_ratio=0.0):
@@ -133,16 +144,23 @@ def evaluate(cond, region, device, verbose=True):
     evs = {k: InstanceEvaluator() for k in acc}
     n_full = 0
     for n, k in enumerate(tiles):
-        D, A, full = mosaic(ds, cell, gi, gj, k)
+        D, A, full, LU = mosaic(ds, cell, gi, gj, k)
         n_full += full
-        dems, airs = [], []
+        dems, airs, lus = [], [], []
         for dy, dx in OFFSETS:
             r, c = 128 + dy, 128 + dx
             dems.append(D[r:r + 128, c:c + 128])
             airs.append(A[r:r + 128, c:c + 128])
+            if LU is not None:
+                # 地形と同じ窓で切る
+                lus.append(LU[r:r + 128, c:c + 128])
         dem = torch.from_numpy(np.stack(dems)[:, None]).float().to(device)
         air = torch.from_numpy(np.stack(airs).transpose(0, 3, 1, 2)).float().to(device) / 255.0
-        pr = torch.sigmoid(model(dem, air)).cpu().numpy()[:, 0]
+        # **pkl に土地利用があるかではなく、モデルが3入力かで決める。**
+        # _lu.pkl を2入力の条件で読むと、余計な引数を渡して落ちる。
+        extra = ([_landuse.onehot_torch(np.stack(lus), device=device)]
+                 if (LU is not None and minputs.needs_landuse(cond)) else [])
+        pr = torch.sigmoid(model(dem, air, *extra)).cpu().numpy()[:, 0]
 
         wa = np.zeros((128, 128), np.float32)
         ws = np.zeros_like(wa)

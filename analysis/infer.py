@@ -15,6 +15,7 @@ import pandas as pd
 import torch
 
 from . import config
+from dc5lib import inputs as minputs
 from dc5lib.models import build_model_for, load_weights
 
 
@@ -62,8 +63,10 @@ def run_condition(cond, tiles, device, batch_size=32, progress_every=20):
         target = torch.from_numpy(tiles.mask[s:e]).to(device).float() > 0.5
 
         if cond.use_airphoto:
-            air = torch.from_numpy(tiles.air[s:e]).to(device).float() / 255.0
-            logits = model(terrain, air)
+            logits = model(*minputs.model_args(
+                cond, terrain, tiles.air[s:e],
+                None if tiles.landuse is None else tiles.landuse[s:e],
+                device=device))
         else:
             logits = model(terrain)
 

@@ -16,8 +16,7 @@ augment: false
 bg_ratio: 0.0
 status: active
 label: Final SAM+APM 損失 a0.85/b0.15
-note: 損失を再現率側に振った版（FocalTversky alpha=0.85/beta=0.15）。WNet の1段目候補。alpha/beta を振る実験は本研究で初。展望_再現率をどう上げるか.md
-  10.1/10.8
+note: "損失を再現率側に振った版（FocalTversky alpha=0.85/beta=0.15）。手順0の片側。結果は 展望_再現率をどう上げるか.md 11節 — 面積R は +0.0307 動くが箇所R は +0.0078 だけで、WNet の1段目候補にはならなかった。"
 dataset:
   Hiroshima: hiroshima_sam_apm.pkl
   Shimane: shimane_sam_apm.pkl

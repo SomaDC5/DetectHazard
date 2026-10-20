@@ -1,0 +1,47 @@
+# 実験条件の定義。フォルダを増やせば条件が増える。
+# 重みは dc5-data/weights/<name>/ にあり、ここには置かない。
+name: FinalFusion_SAM_APM_OL_LogitHinge
+arch: MultiEncoderUNet
+family: Final
+inputs:
+- key: terrain
+  source: SAM
+  channels: 1
+  field: DEM
+- key: airphoto
+  source: APM
+  channels: 3
+  field: AirPhoto
+augment: false
+bg_ratio: 0.0
+status: active
+label: Final SAM+APM OL学習 + ロジットヒンジ
+note: ロジット空間のヒンジを足した条件。オーバーラップ学習のままゼロから学習する。確率空間の損失は飽和した画素に勾配を送れず、正解画素の20.3パーセントがロジット-10以下で凍結している（展望18.1）。ヒンジの勾配は大きさに依存せず定数なので、そこに唯一届く。lam
+  は重みの勾配ノルムをFocalTverskyと同等に合わせた実測値（展望18.2）。展望_再現率をどう上げるか.md 18
+dataset:
+  Hiroshima: hiroshima_sam_apm.pkl
+  Shimane: shimane_sam_apm.pkl
+train:
+  epochs: 1000
+  batch_size: 32
+  lr: 0.0001
+  seed: 42
+  early_stop_patience: 100
+  # **ゼロから学習する。** 追加学習(init_from)は一度試して外した。
+  # 対照（同じ損失のまま追加学習）だけで画素R が +0.054 / 画素P が -0.063 動き、
+  # シードの帯（0.0512/0.0430）と同じ大きさだった。さらに「60エポック足すこと」
+  # 自体が動作点を動かす（面積R -0.00318/epoch, r=-0.981）ので、
+  # ヒンジの効果を帰属できない。展望_再現率をどう上げるか.md 18.10
+  # ゼロからなら対照は学習済みの FinalFusion_SAM_APM_OverlapTrain がそのまま使える。
+  split: 6:2:2 (train_test_split test_size=0.2 -> 0.25, random_state=42)
+  model_selection: 検証データのF値が最良のエポック
+  loss:
+    type: focal_tversky_logit_margin
+    alpha: 0.7
+    beta: 0.3
+    gamma: 0.75
+    margin: 10.0
+    lam_pos: 0.02
+    lam_neg: 0.1
+    clamp: 30.0
+  augment_params: null

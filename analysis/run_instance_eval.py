@@ -34,6 +34,7 @@ import torch  # noqa: E402
 
 from analysis import config, infer, instances  # noqa: E402
 from analysis.data import build_tileset  # noqa: E402
+from dc5lib import inputs as minputs  # noqa: E402
 from dc5lib.models import build_model_for, load_weights  # noqa: E402
 
 INSTANCES_DIR = os.path.join(config.OUTPUT_DIR, "instances")
@@ -64,8 +65,10 @@ def run_condition(cond, tiles, device, batch_size=32, connectivity=8, min_size=1
         e = min(s + batch_size, n)
         terrain = torch.from_numpy(tiles.terrain[s:e]).to(device)
         if cond.use_airphoto:
-            air = torch.from_numpy(tiles.air[s:e]).to(device).float() / 255.0
-            logits = model(terrain, air)
+            logits = model(*minputs.model_args(
+                cond, terrain, tiles.air[s:e],
+                None if tiles.landuse is None else tiles.landuse[s:e],
+                device=device))
         else:
             logits = model(terrain)
         pred = (torch.sigmoid(logits) > thr).squeeze(1).cpu().numpy()
@@ -148,7 +151,9 @@ def main():
         for (pkl_path, bg_ratio), group in config.group_by_pkl(todo, region).items():
             need_air = any(c.use_airphoto for c in group)
             print(f"\n[{region}] {os.path.basename(pkl_path)}")
-            tiles = build_tileset(pkl_path, region, need_air, bg_ratio=bg_ratio)
+            tiles = build_tileset(pkl_path, region, need_air, bg_ratio=bg_ratio,
+                                  need_landuse=any(minputs.needs_landuse(c)
+                                                   for c in group))
             for c in group:
                 print(f"  → {c.name}")
                 df, inst = run_condition(c, tiles, device, args.batch_size,
