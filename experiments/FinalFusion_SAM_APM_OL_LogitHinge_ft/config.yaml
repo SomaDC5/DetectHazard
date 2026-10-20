@@ -1,0 +1,44 @@
+# 実験条件の定義。フォルダを増やせば条件が増える。
+# 重みは dc5-data/weights/<name>/ にあり、ここには置かない。
+name: FinalFusion_SAM_APM_OL_LogitHinge_ft
+arch: MultiEncoderUNet
+family: Final
+inputs:
+- key: terrain
+  source: SAM
+  channels: 1
+  field: DEM
+- key: airphoto
+  source: APM
+  channels: 3
+  field: AirPhoto
+augment: false
+bg_ratio: 0.0
+status: active
+label: Final SAM+APM OL学習 + ロジットヒンジ(追加学習)
+note: ロジット空間のヒンジを足した追加学習。OL学習の重みから続ける。確率空間の損失は飽和した画素に勾配を送れず、正解画素の20.3パーセントがロジット-10以下で凍結している（展望18.1）。ヒンジの勾配は大きさに依存せず定数なので、そこに唯一届く。lam
+  は重みの勾配ノルムをFocalTverskyと同等に合わせた実測値（展望18.2）。展望_再現率をどう上げるか.md 18
+dataset:
+  Hiroshima: hiroshima_sam_apm.pkl
+  Shimane: shimane_sam_apm.pkl
+train:
+  epochs: 60
+  batch_size: 32
+  lr: 0.0001
+  seed: 42
+  early_stop_patience: 20
+  # OL学習の重みから続ける。ゼロからではない。
+  # ヒンジは飽和した重みに効く損失なので、こちらで安く機構を試せる。
+  init_from: FinalFusion_SAM_APM_OverlapTrain
+  split: 6:2:2 (train_test_split test_size=0.2 -> 0.25, random_state=42)
+  model_selection: 検証データのF値が最良のエポック
+  loss:
+    type: focal_tversky_logit_margin
+    alpha: 0.7
+    beta: 0.3
+    gamma: 0.75
+    margin: 10.0
+    lam_pos: 0.02
+    lam_neg: 0.1
+    clamp: 30.0
+  augment_params: null

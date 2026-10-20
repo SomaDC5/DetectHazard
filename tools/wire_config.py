@@ -181,6 +181,60 @@ print("乱数を固定:", CFG.seed)
     return src.replace(anchor, block + anchor, 1), ["乱数の固定を追加"]
 
 
+def _add_init_from(src):
+    """CFG.init_from があれば、その条件の重みを読んで続きから学習する。
+
+    なぜ必要か（展望_再現率をどう上げるか.md 18.3）
+    ----------------------------------------------
+    ロジット空間のヒンジは**すでに飽和したモデルに効く**性質の損失である。
+    確率空間の損失が勾配を送れない領域（正解画素の 20.3% が z < -10）に、
+    大きさに依存しない定数の勾配を送る。
+
+    だから「ゼロから学習」より「飽和した重みから追加学習」のほうが
+    機構を直接試せるし、エポック数が少なくて済む。
+    ゼロからの条件は、これで効くと分かってから作る。
+
+    **ゼロから学習する条件には影響しない**（init_from が None なら素通り）。
+    挿す場所は `model.to(device)` の直後。それより前だと CPU 上の
+    モデルに GPU の state_dict を読むことになる。
+    """
+    if "CFG.init_from" in src:
+        return src, []
+    anchor = "model.to(device)"
+    if anchor not in src:
+        return src, []
+    block = [
+        "",
+        "# ============================================================",
+        "# 追加学習。CFG.init_from があれば、その条件の重みから続ける。",
+        "# None（既定）なら何もしないので、ゼロから学習する条件には影響しない。",
+        "# ロジット空間の損失は飽和した重みに効くので、こちらで安く試せる。",
+        "# ============================================================",
+        "if CFG.init_from:",
+        "    from dc5lib.models import load_weights as _load_init",
+        "    from dc5lib.registry import get as _get_init",
+        "    _src_cond = _get_init(CFG.init_from)",
+        "    _meta = _load_init(model, _src_cond.weights, device=device)",
+        '    print(f"追加学習: {CFG.init_from} の重みから続ける")',
+        '    print("  重み:", _src_cond.weights)',
+        "    if _meta:",
+        '        print("  元の記録:", _meta)',
+        "else:",
+        '    print("ゼロから学習（init_from なし）")',
+        "",
+    ]
+    out, done = [], False
+    for ln in src.splitlines(keepends=True):
+        out.append(ln)
+        if not done and ln.strip() == anchor:
+            nl = "\n" if ln.endswith("\n") else ""
+            out.append("\n".join(block) + nl)
+            done = True
+    if not done:
+        return src, []
+    return "".join(out), ["追加学習(init_from)の読み込みを追加"]
+
+
 def _is_train_split(line):
     """学習の分割セルか（評価セルの train_test_split は触らない）。"""
     return "dataset2" in line or "idx_all" in line or "idx_trainval" in line
@@ -245,6 +299,15 @@ def wire(cond_dir, check_only=False):
         # 乱数の固定（モデルの初期値と shuffle）
         if "build_model(get(CONDITION).arch)" in new:
             fixed, done = _add_seed(new)
+            if done:
+                if check_only:
+                    remaining += [f"c{ci} {d}" for d in done]
+                else:
+                    new = fixed
+                    changes += [f"c{ci} {d}" for d in done]
+        # 追加学習（init_from）の重み読み込み
+        if "build_model(get(CONDITION).arch)" in new:
+            fixed, done = _add_init_from(new)
             if done:
                 if check_only:
                     remaining += [f"c{ci} {d}" for d in done]

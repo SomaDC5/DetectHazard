@@ -15,6 +15,11 @@
     instance_weighted_focal_tversky    箇所正規化版。上に加えて a0 / p / center_lam
                                        正解の箇所ごとに重みの総和を揃える。
                                        重みマップを別に渡す必要がある（needs_weight=True）
+    focal_tversky_logit_margin         ロジット空間のヒンジを足した版。
+                                       margin / lam_pos / lam_neg / clamp
+                                       飽和した画素にも定数の勾配を送る。展望 18
+
+    focal_tversky の clamp は既定 10.0（従来の挙動）。広げたいときだけ書く。
 
     python -m dc5lib.losses                       対応している type と既定値
     python -m dc5lib.losses <条件名>              その条件の損失を表示
@@ -37,12 +42,20 @@ class FocalTverskyLoss(nn.Module):
     実装（と意図）はこちらが正しい。alpha > beta で見逃しを重く罰する。
     """
 
-    def __init__(self, alpha=0.7, beta=0.3, gamma=0.75, smooth=1e-6):
+    def __init__(self, alpha=0.7, beta=0.3, gamma=0.75, smooth=1e-6, clamp=10.0):
         super().__init__()
         self.alpha, self.beta, self.gamma, self.smooth = alpha, beta, gamma, smooth
+        # clamp はロジットを切る幅。**既定の 10.0 は既存40条件の挙動そのまま。**
+        #
+        # torch.clamp は範囲外の勾配が厳密に 0 になる。実測（展望 18.1）では
+        # OL学習の重みで全画素の 97.56% が |z| > 10 にいて、FocalTversky の
+        # 勾配が厳密に 0 だった。clamp を広げると σ'(z) の小さな勾配が戻る。
+        # Adam は勾配を RMS で正規化するので、0 と 4.5e-5 は同じではない。
+        self.clamp = float(clamp)
 
     def forward(self, logits, targets, weight=None):
-        preds = torch.sigmoid(logits.clamp(-10, 10)).reshape(logits.size(0), -1)
+        c = self.clamp
+        preds = torch.sigmoid(logits.clamp(-c, c)).reshape(logits.size(0), -1)
         t = targets.reshape(targets.size(0), -1).to(preds.dtype)
         TP = (preds * t).sum(1)
         FP = ((1 - t) * preds).sum(1)
@@ -52,11 +65,80 @@ class FocalTverskyLoss(nn.Module):
         return torch.pow(1 - tv, self.gamma).mean()
 
 
+class FocalTverskyLogitMarginLoss(nn.Module):
+    """FocalTversky に、ロジット空間のヒンジを足したもの。
+
+        L = FT(σ(z), t)
+          + lam_pos * mean_{t=1} relu(margin - z)     正解画素を margin まで押し上げる
+          + lam_neg * mean_{t=0} relu(z + margin)     背景画素を -margin まで押し下げる
+
+    なぜこれなのか（展望_再現率をどう上げるか.md 18）
+    ------------------------------------------------
+    確率空間の損失は、飽和した画素に勾配を送れない。実測では
+
+        正解画素の 20.3% が z < -10（凍結）。落ちた箇所の 54.7% は1画素も出ない
+        外れたかたまりの中位ロジット 26.93 を押し下げる力が +10 で消える
+
+    **ヒンジの勾配は z の大きさに依存せず定数**なので、z = -30 の画素も
+    z = -5 の画素も同じ力で押される。飽和した領域に唯一届く形である。
+    gamma のような focusing は入れない。定数であること自体が狙いだから。
+
+    副作用として**ロジットが ±margin 付近に収まる。**
+    的中と外れの分離（41.33 対 26.93）は、押し上げと押し下げが逆向きなので
+    縮まらずに広がる方向に働く。刈り取り（13）のしきい値も安定する。
+
+    平均の取り方
+    ------------
+    FocalTversky はタイルごとに Tversky を出してからバッチ平均する。
+    ヒンジは**バッチ全体の画素でプールして平均**する。こうすると
+    正例の無いタイルがあっても項が消えないので、
+    「背景のみタイルは勾配が 0」（展望 15）の非対称が持ち込まれない。
+
+    lam の決め方
+    ------------
+    重みに届く勾配ノルムを実測して合わせた（バッチ32・OL学習の重み）。
+
+        FocalTversky            8.16e-01
+        ヒンジ 正解側 lam=1     4.22e+01   FT の 52 倍
+        ヒンジ 背景側 lam=1     7.73e+00   FT の  9 倍
+
+    FT と同等にするなら lam_pos 0.019 / lam_neg 0.106。既定はこれを丸めた値。
+    収束後の重みで測った値なので、学習の初期は FT の方が大きく、
+    **ヒンジは後半ほど相対的に効く。** それは狙いどおり。
+    """
+
+    def __init__(self, alpha=0.7, beta=0.3, gamma=0.75, smooth=1e-6,
+                 margin=10.0, lam_pos=0.02, lam_neg=0.1, clamp=10.0):
+        super().__init__()
+        self.ft = FocalTverskyLoss(alpha, beta, gamma, smooth, clamp)
+        self.margin = float(margin)
+        self.lam_pos = float(lam_pos)
+        self.lam_neg = float(lam_neg)
+
+    def forward(self, logits, targets, weight=None):
+        base = self.ft(logits, targets)
+        # **生のロジットを使う。** clamp を通さないことがこの項の存在理由。
+        z = logits.reshape(-1)
+        t = targets.reshape(-1).to(z.dtype) > 0.5
+        m = self.margin
+        out = base
+        if self.lam_pos and t.any():
+            out = out + self.lam_pos * torch.relu(m - z[t]).mean()
+        if self.lam_neg and (~t).any():
+            out = out + self.lam_neg * torch.relu(z[~t] + m).mean()
+        return out
+
+
 DEFAULTS = {
     "focal_tversky": {"alpha": 0.7, "beta": 0.3, "gamma": 0.75},
     "instance_weighted_focal_tversky": {
         "alpha": 0.7, "beta": 0.5, "gamma": 0.75,
         "a0": 300, "p": 0.5, "center_lam": 0.0,
+    },
+    # ロジット空間のヒンジ。clamp を広げるのが前提（既定 30）。
+    "focal_tversky_logit_margin": {
+        "alpha": 0.7, "beta": 0.3, "gamma": 0.75,
+        "margin": 10.0, "lam_pos": 0.02, "lam_neg": 0.1, "clamp": 30.0,
     },
 }
 
@@ -95,7 +177,15 @@ def build_loss(cond):
     p.update({k: v for k, v in spec.items() if v is not None})
 
     if kind == "focal_tversky":
-        return FocalTverskyLoss(p["alpha"], p["beta"], p["gamma"]), False
+        # clamp は既定 10.0。config に書かなければ従来どおり。
+        return FocalTverskyLoss(p["alpha"], p["beta"], p["gamma"],
+                                clamp=p.get("clamp", 10.0)), False
+
+    if kind == "focal_tversky_logit_margin":
+        return FocalTverskyLogitMarginLoss(
+            p["alpha"], p["beta"], p["gamma"],
+            margin=p["margin"], lam_pos=p["lam_pos"], lam_neg=p["lam_neg"],
+            clamp=p["clamp"]), False
 
     crit = InstanceWeightedFocalTverskyLoss(p["alpha"], p["beta"], p["gamma"])
     return crit, True
@@ -175,6 +265,14 @@ if __name__ == "__main__":
                     note = "  重みの強さ。1.0 で完全な箇所正規化、0 で無効"
                 elif kk == "center_lam":
                     note = "  中心重みの強さ。まず 0 で試す"
+                elif kk == "margin":
+                    note = "  ヒンジの折れ点。ロジットはこの付近に収まる"
+                elif kk == "lam_pos":
+                    note = "  正解画素を押し上げる強さ。0.019 で FT と同等"
+                elif kk == "lam_neg":
+                    note = "  背景画素を押し下げる強さ。0.106 で FT と同等"
+                elif kk == "clamp":
+                    note = "  ロジットを切る幅。外は勾配が厳密に0になる"
                 print(f"      {kk:<12}{vv}{note}")
             print()
         print("条件名を渡すと、その条件の損失を表示します。")
