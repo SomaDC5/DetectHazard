@@ -181,6 +181,32 @@ print("乱数を固定:", CFG.seed)
     return src.replace(anchor, block + anchor, 1), ["乱数の固定を追加"]
 
 
+def _add_model_import(src):
+    """build_model を使うセルに import が無ければ足す。
+
+    `("モデル", ...)` の置き換えで `model = build_model(...)` を入れるが、
+    **import は別のセルにあることが多く、取りこぼす。**
+    元のノートブックがモデルクラスを直書きしていた条件では
+    `from dc5lib.models import build_model` が無いまま残り、
+    学習の直前に NameError で落ちる（check.py が拾う）。
+    """
+    if "from dc5lib.models import build_model" in src:
+        return src, []
+    if "from dc5lib.losses import" not in src:
+        return src, []
+    out = []
+    done = False
+    for ln in src.splitlines(keepends=True):
+        if not done and ln.lstrip().startswith("from dc5lib.losses import"):
+            nl = "\n" if ln.endswith("\n") else ""
+            out.append("from dc5lib.models import build_model" + nl)
+            done = True
+        out.append(ln)
+    if not done:
+        return src, []
+    return "".join(out), ["build_model の import を追加"]
+
+
 def _add_init_from(src):
     """CFG.init_from があれば、その条件の重みを読んで続きから学習する。
 
@@ -299,6 +325,15 @@ def wire(cond_dir, check_only=False):
         # 乱数の固定（モデルの初期値と shuffle）
         if "build_model(get(CONDITION).arch)" in new:
             fixed, done = _add_seed(new)
+            if done:
+                if check_only:
+                    remaining += [f"c{ci} {d}" for d in done]
+                else:
+                    new = fixed
+                    changes += [f"c{ci} {d}" for d in done]
+        # build_model の import（元がモデル直書きだった条件で落ちる）
+        if "from dc5lib.losses import" in new:
+            fixed, done = _add_model_import(new)
             if done:
                 if check_only:
                     remaining += [f"c{ci} {d}" for d in done]

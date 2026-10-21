@@ -1501,6 +1501,199 @@ class TripleEncoderUNet(nn.Module):
         return self.out_conv(d1)
 
 
+# ---------------------------------------------------------------- SegFormer
+# SegFormer（Mix Transformer + 全MLPデコーダ）を自分で書いたもの。
+#
+# なぜ自分で書くのか（修士論文の構成.md 3.3）
+# ------------------------------------------
+# 目的は「アーキテクチャの族を変えても精度の帯に入る」ことを示すことである。
+# transformers の SegformerForSemanticSegmentation を使うと
+#   ・ImageNet 事前学習の重みが入り、**族の違いと事前学習の有無が混ざる**
+#   ・既存40条件はすべてゼロから学習しているので比較にならない
+# ので、**ゼロから学習できる自己完結の実装**を置く。torch だけで動く。
+#
+# 規模は SegFormer-B0 に合わせた（embed_dims [32,64,160,256]）。
+# 符号化器は入力の種類ごとに2本に分ける。3.2 で Early 融合（入力を連結して
+# 1本に通す）が明確に悪い（面積F 0.6363）と測れているので、
+# **融合位置を揃えないと「族の違い」ではなく「融合位置の違い」を測ってしまう。**
+
+
+class _DWConv(nn.Module):
+    """Mix-FFN の中の 3x3 深さ方向畳み込み。位置符号の代わりになる。"""
+
+    def __init__(self, dim):
+        super().__init__()
+        self.dw = nn.Conv2d(dim, dim, 3, 1, 1, groups=dim)
+
+    def forward(self, x, h, w):
+        b, n, c = x.shape
+        x = x.transpose(1, 2).reshape(b, c, h, w)
+        x = self.dw(x)
+        return x.flatten(2).transpose(1, 2)
+
+
+class _MixFFN(nn.Module):
+    """Linear → 3x3 深さ方向畳み込み → GELU → Linear。"""
+
+    def __init__(self, dim, hidden):
+        super().__init__()
+        self.fc1 = nn.Linear(dim, hidden)
+        self.dw = _DWConv(hidden)
+        self.act = nn.GELU()
+        self.fc2 = nn.Linear(hidden, dim)
+
+    def forward(self, x, h, w):
+        return self.fc2(self.act(self.dw(self.fc1(x), h, w)))
+
+
+class _EffAttn(nn.Module):
+    """空間を縮めた自己注意。K と V を sr 倍に縮めて計算量を落とす。
+
+    注意の計算量は本来 O(N^2)（N = H*W）だが、K,V を sr^2 分の1に縮めることで
+    O(N^2 / sr^2) になる。128x128 の入力でも段1（32x32）が扱える。
+    """
+
+    def __init__(self, dim, heads, sr):
+        super().__init__()
+        assert dim % heads == 0, (dim, heads)
+        self.heads = heads
+        self.scale = (dim // heads) ** -0.5
+        self.q = nn.Linear(dim, dim)
+        self.kv = nn.Linear(dim, dim * 2)
+        self.proj = nn.Linear(dim, dim)
+        self.sr = sr
+        if sr > 1:
+            self.reduce = nn.Conv2d(dim, dim, sr, sr)
+            self.norm = nn.LayerNorm(dim)
+
+    def forward(self, x, h, w):
+        b, n, c = x.shape
+        q = (self.q(x).reshape(b, n, self.heads, c // self.heads)
+             .permute(0, 2, 1, 3))
+        if self.sr > 1:
+            y = x.transpose(1, 2).reshape(b, c, h, w)
+            y = self.reduce(y).flatten(2).transpose(1, 2)
+            y = self.norm(y)
+        else:
+            y = x
+        kv = (self.kv(y).reshape(b, -1, 2, self.heads, c // self.heads)
+              .permute(2, 0, 3, 1, 4))
+        k, v = kv[0], kv[1]
+        a = (q @ k.transpose(-2, -1)) * self.scale
+        a = a.softmax(dim=-1)
+        out = (a @ v).transpose(1, 2).reshape(b, n, c)
+        return self.proj(out)
+
+
+class _MiTBlock(nn.Module):
+    def __init__(self, dim, heads, sr, mlp_ratio=4):
+        super().__init__()
+        self.n1 = nn.LayerNorm(dim)
+        self.attn = _EffAttn(dim, heads, sr)
+        self.n2 = nn.LayerNorm(dim)
+        self.ffn = _MixFFN(dim, dim * mlp_ratio)
+
+    def forward(self, x, h, w):
+        x = x + self.attn(self.n1(x), h, w)
+        x = x + self.ffn(self.n2(x), h, w)
+        return x
+
+
+class _OverlapPatchEmbed(nn.Module):
+    """重なりのあるパッチ分割。畳み込みなので境界が切れない。"""
+
+    def __init__(self, in_ch, dim, k, stride):
+        super().__init__()
+        self.proj = nn.Conv2d(in_ch, dim, k, stride, k // 2)
+        self.norm = nn.LayerNorm(dim)
+
+    def forward(self, x):
+        x = self.proj(x)
+        h, w = x.shape[2], x.shape[3]
+        x = x.flatten(2).transpose(1, 2)
+        return self.norm(x), h, w
+
+
+class MiTEncoder(nn.Module):
+    """Mix Transformer の符号化器。4段の特徴マップを返す。
+
+    128x128 の入力に対して 32 / 16 / 8 / 4 の解像度になる。
+    """
+
+    DIMS = (32, 64, 160, 256)
+    DEPTHS = (2, 2, 2, 2)
+    HEADS = (1, 2, 5, 8)
+    SRS = (8, 4, 2, 1)
+
+    def __init__(self, in_ch=3):
+        super().__init__()
+        self.embeds = nn.ModuleList()
+        self.stages = nn.ModuleList()
+        self.norms = nn.ModuleList()
+        prev = in_ch
+        for s, dim in enumerate(self.DIMS):
+            k, st = (7, 4) if s == 0 else (3, 2)
+            self.embeds.append(_OverlapPatchEmbed(prev, dim, k, st))
+            self.stages.append(nn.ModuleList(
+                [_MiTBlock(dim, self.HEADS[s], self.SRS[s])
+                 for _ in range(self.DEPTHS[s])]))
+            self.norms.append(nn.LayerNorm(dim))
+            prev = dim
+
+    def forward(self, x):
+        out = []
+        for emb, blocks, norm in zip(self.embeds, self.stages, self.norms):
+            x, h, w = emb(x)
+            for blk in blocks:
+                x = blk(x, h, w)
+            x = norm(x)
+            b, n, c = x.shape
+            x = x.transpose(1, 2).reshape(b, c, h, w)
+            out.append(x)
+        return out
+
+
+class SegFormerDual(nn.Module):
+    """2本の Mix Transformer 符号化器 + 全MLPデコーダ。
+
+    デコーダは SegFormer のとおり、各段の特徴を 1x1 畳み込みで同じ次元に
+    そろえ、最も細かい段の解像度（32x32）に上げてから連結して融合する。
+    **転置畳み込みもスキップ接続も使わない**ので、U-Net とは系統が違う。
+
+    forward の引数は MultiEncoderUNet と同じ (dem, air) にしてある。
+    """
+
+    def __init__(self, out_channels=1, dec_dim=256, p_drop=0.1):
+        super().__init__()
+        self.slope_enc = MiTEncoder(in_ch=1)        # 地形量
+        self.curv_enc = MiTEncoder(in_ch=3)         # 航空写真
+        dims = MiTEncoder.DIMS
+        # 2本ぶん、4段ぶんの 1x1 畳み込み
+        self.lat = nn.ModuleList([nn.Conv2d(d, dec_dim, 1)
+                                  for d in dims for _ in (0, 1)])
+        self.fuse = nn.Sequential(
+            nn.Conv2d(dec_dim * len(dims) * 2, dec_dim, 1, bias=False),
+            nn.BatchNorm2d(dec_dim), nn.ReLU(inplace=True),
+            nn.Dropout2d(p_drop))
+        self.out_conv = nn.Conv2d(dec_dim, out_channels, 1)
+
+    def forward(self, dem, air):
+        fs = self.slope_enc(dem)
+        fa = self.curv_enc(air)
+        ref = fs[0].shape[2:]                       # 32x32
+        feats = []
+        for i, (a, b) in enumerate(zip(fs, fa)):
+            for j, f in enumerate((a, b)):
+                g = self.lat[2 * i + j](f)
+                if g.shape[2:] != ref:
+                    g = F.interpolate(g, size=ref, mode="bilinear",
+                                      align_corners=False)
+                feats.append(g)
+        x = self.fuse(torch.cat(feats, dim=1))
+        x = self.out_conv(x)
+        return F.interpolate(x, size=dem.shape[2:], mode="bilinear",
+                             align_corners=False)
+
 MODEL_CLASSES = {
     "UNet": UNet,
     "MultiEncoderUNet": MultiEncoderUNet,
@@ -1509,6 +1702,7 @@ MODEL_CLASSES = {
     "MiddleFusionUNet": MiddleFusionUNet,
     "AttentionMultiEncoderUNet": AttentionMultiEncoderUNet,
     "TransUNetDual": TransUNetDual,
+    "SegFormerDual": SegFormerDual,
     "DeepSupMultiEncoderUNet": DeepSupMultiEncoderUNet,
     "AllSkipDeepSupMultiEncoderUNet": AllSkipDeepSupMultiEncoderUNet,
     "SupAttnMultiEncoderUNet": SupAttnMultiEncoderUNet,
