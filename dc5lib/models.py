@@ -1518,6 +1518,42 @@ class TripleEncoderUNet(nn.Module):
 # **融合位置を揃えないと「族の違い」ではなく「融合位置の違い」を測ってしまう。**
 
 
+def _mit_init(m):
+    """SegFormer / ViT 系の標準の初期化。
+
+    **PyTorch の既定（Linear は kaiming_uniform）では学習が立ち上がらない。**
+    実際に、これを入れずに学習した1本目は検証F値 0.4873 で止まった
+    （出発点 0.6691。帯 0.0024 の 75倍下）。
+    最良が ep20 でその後100エポック更新が無く、
+    **早期に悪い解に落ちて抜け出せない**という形だった。
+
+    内訳は公式実装（NVlabs/SegFormer）と同じにしてある。
+
+        Linear      切断正規分布 std=0.02、バイアスは 0
+        LayerNorm   weight=1、bias=0
+        Conv2d      正規分布 std=sqrt(2/fan_out)、バイアスは 0
+
+    Conv2d の fan_out は**出力チャネル側**で数える（kernel^2 * out / groups）。
+    Mix-FFN の深さ方向畳み込みは groups=dim なので、ここを割らないと
+    分散が dim 倍小さくなる。
+    """
+    import math
+
+    if isinstance(m, nn.Linear):
+        nn.init.trunc_normal_(m.weight, std=0.02)
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
+    elif isinstance(m, nn.LayerNorm):
+        nn.init.ones_(m.weight)
+        nn.init.zeros_(m.bias)
+    elif isinstance(m, nn.Conv2d):
+        fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+        fan_out //= max(m.groups, 1)
+        nn.init.normal_(m.weight, 0.0, math.sqrt(2.0 / fan_out))
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
+
+
 class _DWConv(nn.Module):
     """Mix-FFN の中の 3x3 深さ方向畳み込み。位置符号の代わりになる。"""
 
@@ -1639,6 +1675,7 @@ class MiTEncoder(nn.Module):
                  for _ in range(self.DEPTHS[s])]))
             self.norms.append(nn.LayerNorm(dim))
             prev = dim
+        self.apply(_mit_init)          # **既定の初期化では学習が立ち上がらない**
 
     def forward(self, x):
         out = []
@@ -1676,6 +1713,17 @@ class SegFormerDual(nn.Module):
             nn.BatchNorm2d(dec_dim), nn.ReLU(inplace=True),
             nn.Dropout2d(p_drop))
         self.out_conv = nn.Conv2d(dec_dim, out_channels, 1)
+        # 符号化器は自分で初期化しているが、デコーダ側にも当てる。
+        # BatchNorm2d は _mit_init が触らないので既定（weight=1, bias=0）のまま
+        self.apply(_mit_init)
+        # **分類ヘッドは _mit_init から外す。**
+        # 1x1 で出力1チャネルなので fan_out=1 となり std=sqrt(2)=1.41 になる。
+        # 入力256チャネルの和を取るので初期の出力が標準偏差 13 まで膨らみ、
+        # 損失の clamp(-10,10) の外に 62% の画素が出て**勾配が来なくなる。**
+        # U-Net 系は初期の出力 std が 0.35 で、外に出る画素は 0% である。
+        # mmsegmentation の慣習に合わせて小さく初期化する。
+        nn.init.normal_(self.out_conv.weight, 0.0, 0.01)
+        nn.init.zeros_(self.out_conv.bias)
 
     def forward(self, dem, air):
         fs = self.slope_enc(dem)
