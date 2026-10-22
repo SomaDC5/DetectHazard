@@ -16,7 +16,7 @@ inputs:
   note: 航空写真 RGB
 augment: false
 bg_ratio: 0.0
-status: active
+status: done
 label: ''
 note: SegFormer（Mix Transformer + 全MLPデコーダ）をゼロから学習する。目的はアーキテクチャの族を変えても精度の帯に入ることを示すこと（修士論文の構成.md
   3.3）。transformers の事前学習モデルを使わないのは、族の違いと事前学習の有無が混ざるため。符号化器は入力ごとに2本に分ける（3.2 で Early
