@@ -1,0 +1,22 @@
+{
+ "condition": "DeepLabV3_SAM_APM",
+ "eval_id": "DeepLabV3_SAM_APM__lab-windows__20261023-132320__hiroshima__gtonly__full__inst__IoU--1--0.3-635d05",
+ "evaluated_at": "2026-10-23T13:23:20",
+ "f1": 0.4884,
+ "fn": 4640,
+ "fp": 4409,
+ "machine": "lab-windows",
+ "metric_kind": "箇所",
+ "n_gt_instances": "8977",
+ "n_pred_instances": "8711",
+ "note": "連結性8近傍 / 最小サイズ10px / 二値化0.5",
+ "precision": 0.4939,
+ "recall": 0.4831,
+ "region": "hiroshima",
+ "run_id": "DeepLabV3_SAM_APM__lab-windows__20261023-132320",
+ "scope": "通常",
+ "setting": "IoU多対1 (0.3)",
+ "tileset": "警戒のみ",
+ "tp": 4337,
+ "weights_sha256": null
+}

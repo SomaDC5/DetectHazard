@@ -17,7 +17,7 @@ inputs:
 augment: false
 bg_ratio: 0.0
 status: done
-label: ''
+label: SegFormer SAM+APM
 note: SegFormer（Mix Transformer + 全MLPデコーダ）をゼロから学習する。目的はアーキテクチャの族を変えても精度の帯に入ることを示すこと（修士論文の構成.md
   3.3）。transformers の事前学習モデルを使わないのは、族の違いと事前学習の有無が混ざるため。符号化器は入力ごとに2本に分ける（3.2 で Early
   融合が明確に悪いので、融合位置を揃えないと族の違いを測れない）。規模は SegFormer-B0 相当で 7.42M パラメータ。学習の設定は既存条件と同一にしてある。

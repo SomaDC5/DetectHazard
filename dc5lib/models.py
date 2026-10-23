@@ -1742,6 +1742,198 @@ class SegFormerDual(nn.Module):
         return F.interpolate(x, size=dem.shape[2:], mode="bilinear",
                              align_corners=False)
 
+# ============================================================
+# 他系統との比較（FCN / PSPNet / DeepLabv3）
+#
+# **符号化器は MultiEncoderUNet と同一にしてある。**
+# 違うのは「頭（デコーダ）」だけなので、U-Net との差を
+# 「符号化器の違い」ではなく「復号のしかたの違い」として読める。
+# SegFormerDual だけは符号化器も Mix Transformer で違うので、
+# その点は論文で明記する必要がある。
+#
+# 3本とも出力ストライド8（128x128 の入力に対して 16x16 で推論し、
+# 最後に双線形で x8 に拡大する）。各族の標準のやり方に合わせてある。
+# **この解像度は結果を左右する。** 16x16 では 1 画素が 35.8 m 四方で、
+# 危険区域のかたまりの中央値（約 81 m 四方）は 2.3 画素しかない。
+# SegFormer（1/4 解像度）が小さいかたまりでぼやけて負けたのと
+# 同じことが起きるなら、それは族の性質として現れたことになる。
+# ============================================================
+class _DualVGGEncoder(nn.Module):
+    """MultiEncoderUNet と同じ2本の符号化器。3モデルで共有する。
+
+    層の名前（slope_enc1 ... curv_enc4）も MultiEncoderUNet に合わせてある。
+    返す特徴（入力 128x128 のとき。チャネル数は2本を連結したあとの値）
+
+        f1  128ch  128x128   ストライド1
+        f2  256ch   64x64    ストライド2
+        f3  512ch   32x32    ストライド4
+        f4 1024ch   16x16    ストライド8   ← ここで止める
+
+    MultiEncoderUNet はこの先に pool4（16x16 → 8x8）とボトルネックがある。
+    FCN はそこまで使い、PSPNet と DeepLabv3 は f4 で止めて頭を載せる。
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.slope_enc1 = _shared_conv_block(1, 64)
+        self.slope_enc2 = _shared_conv_block(64, 128)
+        self.slope_enc3 = _shared_conv_block(128, 256)
+        self.slope_enc4 = _shared_conv_block(256, 512)
+        self.curv_enc1 = _shared_conv_block(3, 64)
+        self.curv_enc2 = _shared_conv_block(64, 128)
+        self.curv_enc3 = _shared_conv_block(128, 256)
+        self.curv_enc4 = _shared_conv_block(256, 512)
+        self.pool = nn.MaxPool2d(2)
+        self.dropout2 = nn.Dropout(0.25)       # MultiEncoderUNet と同じ位置
+
+    def forward(self, dem, air):
+        s1 = self.slope_enc1(dem)
+        s2 = self.slope_enc2(self.pool(s1))
+        s3 = self.slope_enc3(self.pool(s2))
+        s4 = self.dropout2(self.slope_enc4(self.pool(s3)))
+
+        c1 = self.curv_enc1(air)
+        c2 = self.curv_enc2(self.pool(c1))
+        c3 = self.curv_enc3(self.pool(c2))
+        c4 = self.dropout2(self.curv_enc4(self.pool(c3)))
+
+        return [torch.cat([a, b], dim=1)
+                for a, b in ((s1, c1), (s2, c2), (s3, c3), (s4, c4))]
+
+
+class FCNDual(nn.Module):
+    """FCN（Long+ 2015）。**デコーダを持たない。**
+
+    各段の特徴を 1x1 でクラス数まで落とした「スコア」を作り、
+    粗いスコアを拡大して細かいスコアに足していくだけで出力にする。
+    転置畳み込みの積み上げも、特徴どうしの連結もしない。
+
+    元論文の FCN-8s は fc7(s32) / pool4(s16) / pool3(s8) の3段を足すが、
+    本研究の符号化器は s16 までしかないので、ここでは
+
+        ボトルネック(s16) → x2 拡大 → f4(s8) のスコアに加算
+                           → x8 拡大して 128x128
+
+    の2段にしてある。最後の拡大が x8 なので呼び名は FCN-8s のままでよい。
+    """
+
+    def __init__(self, out_channels=1):
+        super().__init__()
+        self.enc = _DualVGGEncoder()
+        # MultiEncoderUNet の fc 層にあたる部分（pool4 のあと）
+        self.pool4 = nn.MaxPool2d(2)
+        self.bottleneck = _shared_conv_block(1024, 1024)
+        self.dropout = nn.Dropout(0.5)         # MultiEncoderUNet と同じ
+        self.score_fc = nn.Conv2d(1024, out_channels, 1)    # s16
+        self.score4 = nn.Conv2d(1024, out_channels, 1)      # s8
+        # **スキップ側のスコアは 0 から始める。**
+        # 元論文も同じで、まず粗いスコアだけで学習が進み、
+        # 細かい段が必要になった分だけ効いてくる。
+        nn.init.zeros_(self.score4.weight)
+        nn.init.zeros_(self.score4.bias)
+
+    def forward(self, dem, air):
+        _, _, _, f4 = self.enc(dem, air)
+        fc = self.dropout(self.bottleneck(self.pool4(f4)))
+        x = self.score_fc(fc)
+        x = F.interpolate(x, size=f4.shape[2:], mode="bilinear",
+                          align_corners=False)
+        x = x + self.score4(f4)
+        return F.interpolate(x, size=dem.shape[2:], mode="bilinear",
+                             align_corners=False)
+
+
+class _PyramidPooling(nn.Module):
+    """PSPNet のピラミッドプーリング。特徴マップを 1/2/3/6 分割して平均する。
+
+    16x16 の段（1画素 = 35.8 m）での各枝の見る範囲。
+
+      枝     区画      実寸
+      1x1    全体      573 m   タイル全体の性格（市街地か山林か）
+      2x2    8x8px     287 m
+      3x3    約5px     191 m
+      6x6    約3px      96 m   ← かたまりの典型サイズ（約81m四方）に近い
+    """
+
+    def __init__(self, in_ch, branch_ch=256, bins=(1, 2, 3, 6)):
+        super().__init__()
+        self.stages = nn.ModuleList([
+            nn.Sequential(
+                nn.AdaptiveAvgPool2d(b),
+                nn.Conv2d(in_ch, branch_ch, 1, bias=False),
+                nn.BatchNorm2d(branch_ch), nn.ReLU(inplace=True))
+            for b in bins])
+        self.out_ch = in_ch + branch_ch * len(bins)
+
+    def forward(self, x):
+        hw = x.shape[-2:]
+        feats = [x] + [F.interpolate(s(x), size=hw, mode="bilinear",
+                                     align_corners=False)
+                       for s in self.stages]
+        return torch.cat(feats, dim=1)
+
+
+class PSPNetDual(nn.Module):
+    """PSPNet（Zhao+ 2017）。ピラミッドプーリングで大域の文脈を足す。
+
+    f4（s8・1024ch）にピラミッドプーリングをかけ、3x3 で混ぜてから
+    1x1 で出力し、x8 に拡大する。
+
+    補助損失（aux head）は既定で切ってある。**損失を他条件と同一に保つため。**
+    ここを変えると「族の違い」と「損失の違い」が混ざる。
+    """
+
+    def __init__(self, out_channels=1, head_ch=512, p_drop=0.1):
+        super().__init__()
+        self.enc = _DualVGGEncoder()
+        self.ppm = _PyramidPooling(1024)
+        self.head = nn.Sequential(
+            nn.Conv2d(self.ppm.out_ch, head_ch, 3, padding=1, bias=False),
+            nn.BatchNorm2d(head_ch), nn.ReLU(inplace=True),
+            nn.Dropout2d(p_drop))
+        self.out_conv = nn.Conv2d(head_ch, out_channels, 1)
+
+    def forward(self, dem, air):
+        _, _, _, f4 = self.enc(dem, air)
+        x = self.out_conv(self.head(self.ppm(f4)))
+        return F.interpolate(x, size=dem.shape[2:], mode="bilinear",
+                             align_corners=False)
+
+
+class DeepLabV3Dual(nn.Module):
+    """DeepLabv3（Chen+ 2017）。ASPP で複数の広がりの文脈を同時に取る。
+
+    **拡張率は特徴マップの大きさに合わせて縮めてある。**
+    元論文は 513x513 の入力・出力ストライド16（33x33 の特徴）で (6,12,18)。
+    本研究は 128x128 の入力・ストライド8（16x16 の特徴）なので、
+    同じ比率にすると (6,12,18)x16/33 ≒ (3,6,9) になる。
+    16x16 の外にはみ出す枝は全タップが余白に当たって無意味になるため、
+    収まる範囲の (2,4,6) にした。各枝の見る範囲（1画素 = 35.8 m）。
+
+      枝           受容野    実寸
+      1x1            1px     36 m
+      3x3 d=2        5px    179 m
+      3x3 d=4        9px    322 m
+      3x3 d=6       13px    465 m
+      大域プーリング   全体    573 m
+    """
+
+    def __init__(self, out_channels=1, head_ch=256, dilations=(2, 4, 6),
+                 p_drop=0.1):
+        super().__init__()
+        self.enc = _DualVGGEncoder()
+        self.aspp = _ASPP(1024, head_ch, branch_ch=head_ch,
+                          dilations=dilations)
+        self.dropout = nn.Dropout2d(p_drop)
+        self.out_conv = nn.Conv2d(head_ch, out_channels, 1)
+
+    def forward(self, dem, air):
+        _, _, _, f4 = self.enc(dem, air)
+        x = self.out_conv(self.dropout(self.aspp(f4)))
+        return F.interpolate(x, size=dem.shape[2:], mode="bilinear",
+                             align_corners=False)
+
+
 MODEL_CLASSES = {
     "UNet": UNet,
     "MultiEncoderUNet": MultiEncoderUNet,
@@ -1751,6 +1943,9 @@ MODEL_CLASSES = {
     "AttentionMultiEncoderUNet": AttentionMultiEncoderUNet,
     "TransUNetDual": TransUNetDual,
     "SegFormerDual": SegFormerDual,
+    "FCNDual": FCNDual,
+    "PSPNetDual": PSPNetDual,
+    "DeepLabV3Dual": DeepLabV3Dual,
     "DeepSupMultiEncoderUNet": DeepSupMultiEncoderUNet,
     "AllSkipDeepSupMultiEncoderUNet": AllSkipDeepSupMultiEncoderUNet,
     "SupAttnMultiEncoderUNet": SupAttnMultiEncoderUNet,

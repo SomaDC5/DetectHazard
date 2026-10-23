@@ -1,0 +1,22 @@
+{
+ "condition": "FCN_SAM_APM",
+ "eval_id": "FCN_SAM_APM__lab-windows__20261023-132320__shimane__all__full__inst__cov_gt-0.5--cov_pred-0.3-ca4173",
+ "evaluated_at": "2026-10-23T13:23:20",
+ "f1": 0.4523,
+ "fn": 15522,
+ "fp": 15322,
+ "machine": "lab-windows",
+ "metric_kind": "箇所",
+ "n_gt_instances": "27445",
+ "n_pred_instances": "28997",
+ "note": "連結性8近傍 / 最小サイズ10px / 二値化0.5",
+ "precision": 0.4716,
+ "recall": 0.4344,
+ "region": "shimane",
+ "run_id": "FCN_SAM_APM__lab-windows__20261023-132320",
+ "scope": "通常",
+ "setting": "被覆 (cov_gt=0.5, cov_pred=0.3)",
+ "tileset": "全件",
+ "tp": 11923,
+ "weights_sha256": null
+}
