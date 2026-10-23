@@ -34,7 +34,7 @@ from analysis.run_instance_eval import SETTINGS                         # noqa: 
 from analysis.run_overlap_eval import (OFFSETS, cos_window, grid_index,  # noqa: E402
                                        mosaic, prep_mask)
 from analysis.run_overlap_prune import full_scores, score               # noqa: E402
-from analysis.run_stage2_train import split_indices                     # noqa: E402
+from analysis.run_stage2_train import split_indices, union_logits       # noqa: E402
 from dc5lib import inputs as minputs  # noqa: E402
 from dc5lib import landuse as _landuse  # noqa: E402
 from dc5lib import paths, stage2                                        # noqa: E402
@@ -49,12 +49,21 @@ THRS = [0.0, 0.2, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.7]
 
 @torch.no_grad()
 def run(stage1, model2, split, device, region="hiroshima", wide_ch=0,
-        use_lu=False):
+        use_lu=False, union_cond=None, agree=False):
     """1段目を走らせ、かたまりごとに2段目の「残す確率」を付ける。
 
     戻り値 (GT, PB, rows) で rows は tile / blob / keep を持つ DataFrame。
+
+    union_cond を渡すと1段目を**和集合**にする（展望 21）。
+    ロジットは要素ごとの max、予測は OR。学習側（run_stage2_train.build）と
+    同じ作り方にしないと、2段目が見たものと違うものを渡すことになる。
     """
     dirname = {"hiroshima": "Hiroshima", "shimane": "Shimane"}[region]
+    # 和集合の相方は、こちらの pkl を読む前に済ませて解放する（メモリ）
+    u_list = ([] if union_cond is None else
+              ([union_cond] if not isinstance(union_cond, (list, tuple))
+               else list(union_cond)))
+    u_packs = [union_logits(c2, split, device, region=region) for c2 in u_list]
     pkl = dataset_path(dirname, stage1.pkl_for(dirname))
     print(f"  読み込み: {pkl.name}")
     ds = load_pkl(pkl)
@@ -109,6 +118,16 @@ def run(stage1, model2, split, device, region="hiroshima", wide_ch=0,
         ws = np.maximum(ws, 1e-6)
         logit = wl / ws
         pred = (wp / ws) > 0.5
+        n_pos = pred.astype(np.float32)        # 合意数（まず自分の分）
+        for u_logit, u_nos in u_packs:
+            assert k in u_logit, f"タイル {k} が相方に無い"
+            assert u_nos[k] == int(ds.No[k]), (
+                f"タイル番号が一致しない: {u_nos[k]} != {int(ds.No[k])}")
+            lg2, pd2 = u_logit[k]
+            logit = np.maximum(logit, lg2)   # OR は max(ロジット) と同じ
+            pred = pred | pd2
+            n_pos = n_pos + pd2.astype(np.float32)
+        ag = (n_pos / (1 + len(u_packs))) if agree else None
         GT[n] = prep_mask(ds, k)
         PB[n] = pred
 
@@ -118,10 +137,11 @@ def run(stage1, model2, split, device, region="hiroshima", wide_ch=0,
         if wide_ch:
             crops, wd, scal, ids = stage2.extract_tile(
                 D, A, logit, pred, lab, sizes, wide=True,
-                lu_mos=LU if use_lu else None)
+                lu_mos=LU if use_lu else None, agree=ag)
             wt = torch.from_numpy(wd).to(device)
         else:
-            crops, scal, ids = stage2.extract_tile(D, A, logit, pred, lab, sizes)
+            crops, scal, ids = stage2.extract_tile(D, A, logit, pred, lab, sizes,
+                                                   agree=ag)
             wt = None
         keep = torch.sigmoid(model2(
             torch.from_numpy(crops).to(device),
@@ -157,6 +177,9 @@ def main():
     ap.add_argument("--region", default="hiroshima", choices=["hiroshima", "shimane"])
     ap.add_argument("--thr", type=float, default=None,
                     help="しきい値。省略すると掃いて表にする")
+    ap.add_argument("--union-with", nargs="*", default=None,
+                    help="和集合にする相方の条件名（展望 21）。"
+                         "学習時と同じものを指定すること")
     ap.add_argument("--by", default="keep", choices=["keep", "logit_max"],
                     help="何で刈るか。keep=2段目の出力 / "
                          "logit_max=しきい値1本（同じ split で比べるための対照）")
@@ -180,6 +203,7 @@ def main():
 
     device = torch.device(args.device) if args.device else pick_device()
     stage1 = get(args.stage1)
+    u_list_names = args.union_with or []
     w = paths.weights_path(args.model)
     if not w.exists():
         sys.exit(f"{w} がありません。run_stage2_train.py で学習してください")
@@ -190,7 +214,18 @@ def main():
         stage2.set_wide_channels(use_lu)
         if stage2.N_WIDE_CH != wide_ch:
             sys.exit(f"重みの広域チャネル {wide_ch} と設定 {stage2.N_WIDE_CH} が違います")
-    m2 = stage2.Stage2Net(wide_ch=wide_ch).to(device)
+    # 合意数チャネルの有無は重みに記録してある（古い重みには無いので既定 6ch）
+    in_ch = int(ck.get("in_ch", stage2.N_CH_BASE))
+    use_agree = bool(ck.get("agree", False))
+    stage2.set_agree_channel(use_agree)
+    if stage2.N_CH != in_ch:
+        sys.exit(f"重みの入力チャネル {in_ch} と設定 {stage2.N_CH} が違います")
+    if use_agree and not u_list_names:
+        sys.exit("この重みは合意数チャネルを使っています。"
+                 "--union-with を学習時と同じように指定してください")
+    if use_agree:
+        print(f"  合意数チャネルあり → 入力 {in_ch}ch")
+    m2 = stage2.Stage2Net(in_ch=in_ch, wide_ch=wide_ch).to(device)
     m2.load_state_dict(ck["model_state_dict"])
     m2.eval()
     if wide_ch:
@@ -200,6 +235,8 @@ def main():
     print(f"device {device}")
 
     GT, PB, rows = run(stage1, m2, args.split, device, args.region,
+                       union_cond=[get(u) for u in args.union_with]
+                       if args.union_with else None, agree=use_agree,
                        wide_ch=wide_ch, use_lu=use_lu)
     R0, P0, F0, n0 = score(GT, PB)
     print(f"\nかたまり {len(rows)}")

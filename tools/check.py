@@ -52,19 +52,50 @@ def _dc5lib_exports():
 _EXPORTS = _dc5lib_exports()
 
 
+def _bound_names(src):
+    """import で**実際に束縛される名前**の集合。
+
+    正規表現で「その行に名前の文字列があるか」を見てはいけない。
+    `from dc5lib.registry import get as _get_init` は `get` を定義しないのに
+    文字列としては含むので、`get` が import 済みだと誤認する。
+    **実際にこれで NameError を見逃した**（SegFormer_SAM_APM）。
+    """
+    names = set()
+    for ln in src.splitlines():
+        t = ln.strip()
+        if t.startswith("from ") and " import " in t:
+            tail = t.split(" import ", 1)[1]
+        elif t.startswith("import "):
+            tail = t[len("import "):]
+        else:
+            continue
+        tail = tail.split("#", 1)[0].strip().strip("()")
+        for part in tail.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if " as " in part:
+                names.add(part.split(" as ", 1)[1].strip())   # 別名だけ束縛
+            else:
+                names.add(part.split(".", 1)[0].strip())
+    return names
+
+
 def _missing_imports(src):
     """呼び出しているのに import も定義もしていない dc5lib の名前。"""
+    bound = _bound_names(src)
     out = []
     for name, mods in _EXPORTS.items():
         if not re.search(rf"(?<![\w.]){re.escape(name)}\s*\(", src):
             continue
         if re.search(rf"^\s*(def|class)\s+{re.escape(name)}\b", src, re.M):
             continue
-        ok = any(re.search(rf"^\s*(from\s+{re.escape(m)}\s+import[^\n]*"
-                           rf"(?<![\w]){re.escape(name)}(?![\w])|import\s+{re.escape(m)})",
-                           src, re.M) for m in mods)
-        if not ok:
-            out.append(name)
+        if name in bound:
+            continue
+        # モジュールごと import して `registry.get(...)` と呼ぶ形も許す
+        if any(m.split(".")[-1] in bound or m in bound for m in mods):
+            continue
+        out.append(name)
     return out
 
 
@@ -84,6 +115,16 @@ for d in sorted(Path(paths.experiments_dir()).iterdir()):
     # 使っているのに import していない dc5lib の名前（順に実行すると NameError）
     for name in sorted(_missing_imports(src)):
         hits.append(f"{name} を import していない")
+    # build_model を使っているのに、使われないモデルクラスが直書きで残っている。
+    # **読んだ人が「このクラスを学習している」と誤解する。**
+    # 元のノートブックを雛形にすると必ず残るので、気づけるようにする。
+    if "build_model(get(CONDITION).arch)" in src:
+        for cname in re.findall(r"^class\s+(\w+)\s*\(\s*nn\.Module", src, re.M):
+            # super(クラス名, self) は定義の一部なので、使用とは数えない
+            uses = len(re.findall(rf"(?<![\w.])(?<!class ){re.escape(cname)}\s*\(", src))
+            supers = len(re.findall(rf"super\(\s*{re.escape(cname)}", src))
+            if uses - supers <= 0:
+                hits.append(f"使っていないモデルクラス {cname} が直書きで残っている")
     # NEEDS_WEIGHT を受け取るだけで使っていない。config を箇所正規化損失に
     # 変えたとき、重みマップを渡さないまま黙って別の損失で学習してしまう
     if "NEEDS_WEIGHT" in src and src.count("NEEDS_WEIGHT") < 2:

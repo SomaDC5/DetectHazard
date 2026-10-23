@@ -69,21 +69,119 @@ def split_indices(n_hz):
     return idx_train, idx_val, idx_test
 
 
-def cache_path(cond_name, split, wide=False, lu=False):
+def cache_path(cond_name, split, wide=False, lu=False, union=None, agree=False):
     """構成ごとに別ファイルにする。中身が違うのに同じ名前だと混ざる。"""
     d = paths.cache_dir("stage2")
     d.mkdir(parents=True, exist_ok=True)
     tag = "" if not wide else ("__wide_lu" if lu else "__wide")
+    if union:
+        # 和集合は中身が別物なので必ず別ファイルにする。
+        # 相方が複数なら全部つなげる（順番は呼び出し側で揃える）
+        us = [union] if isinstance(union, str) else list(union)
+        tag += "__union_" + "_".join(u.replace("FinalFusion_", "") for u in us)
+    if agree:
+        tag += "__agree"
     return d / f"{cond_name}__hiroshima__{split}{tag}.npz"
 
 
 @torch.no_grad()
+def union_logits(cond2, split, device, batch_hint=500, region="hiroshima"):
+    """和集合の相方（2つめの条件）のロジットを、タイルごとに先に作る。
+
+    なぜ別パスにするか（展望_再現率をどう上げるか.md 21.5）
+    ------------------------------------------------------
+    2条件は **別の pkl** を使う（SAM+APM と DEM+APM_normalized）。
+    同時に読むと 10GB 近くになるので、相方のロジットだけ先に作って
+    pkl を解放してから本体の build を回す。
+    ロジットは タイル数 x 128 x 128 x 4byte なので、val なら 120MB 程度。
+
+    戻り値は {タイル番号: (ロジット, 確率マスク)}。
+    タイル番号は ds.No の添字で、2つの pkl で並びが同じであることを前提にする
+    （assert で確かめる）。
+    """
+    dirname = {"hiroshima": "Hiroshima", "shimane": "Shimane"}[region]
+    pkl = dataset_path(dirname, cond2.pkl_for(dirname))
+    print(f"  [和集合の相方] 読み込み: {pkl.name}")
+    ds = load_pkl(pkl)
+    if region == "shimane":
+        # 島根は学習に使っていないので全タイル（run_stage2_eval.run と同じ）
+        tiles = list(range(len(ds.No)))
+    else:
+        hz = [k for k in range(len(ds.No)) if np.max(np.asarray(ds.Mask[k])) >= 1]
+        tr, va, te = split_indices(len(hz))
+        tiles = [hz[i] for i in {"train": tr, "val": va, "test": te}[split]]
+    print(f"  [和集合の相方] {cond2.name}: {len(tiles)} タイル")
+
+    model = build_model_for(cond2).to(device)
+    load_weights(model, cond2.weights, device=device)
+    model.eval()
+    gi, gj, cell = grid_index(ds)
+    W = cos_window()
+
+    out, nos = {}, {}
+    t0 = time.time()
+    for n, k in enumerate(tiles):
+        D, A, _, LU = mosaic(ds, cell, gi, gj, k)
+        dems, airs, lus = [], [], []
+        for dy, dx in OFFSETS:
+            r, c = 128 + dy, 128 + dx
+            dems.append(D[r:r + 128, c:c + 128])
+            airs.append(A[r:r + 128, c:c + 128])
+            if LU is not None:
+                lus.append(LU[r:r + 128, c:c + 128])
+        dem = torch.from_numpy(np.stack(dems)[:, None]).float().to(device)
+        air = (torch.from_numpy(np.stack(airs).transpose(0, 3, 1, 2))
+               .float().to(device) / 255.0)
+        # **pkl に土地利用があるかではなく、モデルが3入力かで決める**
+        # （build と同じ判定。_lu.pkl を2入力の条件で読むと落ちる）
+        extra = ([_landuse.onehot_torch(np.stack(lus), device=device)]
+                 if (LU is not None and minputs.needs_landuse(cond2)) else [])
+        lo = model(dem, air, *extra)[:, 0]
+        pr = torch.sigmoid(lo).cpu().numpy()
+        lg = lo.cpu().numpy()
+        wp = np.zeros((128, 128), np.float32)
+        wl = np.zeros((128, 128), np.float32)
+        ws = np.zeros((128, 128), np.float32)
+        for (dy, dx), p, l in zip(OFFSETS, pr, lg):
+            ys, ye = max(0, dy), min(128, 128 + dy)
+            xs, xe = max(0, dx), min(128, 128 + dx)
+            w = W[ys - dy:ye - dy, xs - dx:xe - dx]
+            wp[ys:ye, xs:xe] += p[ys - dy:ye - dy, xs - dx:xe - dx] * w
+            wl[ys:ye, xs:xe] += l[ys - dy:ye - dy, xs - dx:xe - dx] * w
+            ws[ys:ye, xs:xe] += w
+        ws = np.maximum(ws, 1e-6)
+        out[k] = ((wl / ws).astype(np.float32), (wp / ws) > 0.5)
+        nos[k] = int(ds.No[k])
+        if n % batch_hint == 0:
+            print(f"    [相方] {n}/{len(tiles)}  {time.time()-t0:.0f}秒",
+                  end="\r", flush=True)
+    print(f"  [和集合の相方] 完了 {len(out)} タイル            ")
+    del model, ds
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+    return out, nos
+
+
+@torch.no_grad()
 def build(cond, split, device, batch_hint=500, wide=False, lu=False,
-          pkl_override=None):
-    """1段目を走らせて、かたまりごとの切り出し・スカラー・ラベルを作る。"""
+          pkl_override=None, union_cond=None, agree=False):
+    """1段目を走らせて、かたまりごとの切り出し・スカラー・ラベルを作る。
+
+    union_cond を渡すと**和集合**を1段目にする（展望 21）。
+    マスクの OR は max(ロジット) > 0 と同じなので、ロジットは要素ごとの max、
+    予測は2つの確率マスクの OR にする。切り出しの地形と写真は
+    **cond 側（1つめ）のもの**を使うので、2段目の入力は 6ch のまま変わらない。
+    """
     # 土地利用を2段目に入れるときは、1段目の pkl に LandUse が無いことがある。
     # **1段目のモデルは触らない**（SAM+APM しか使わない）ので、
     # 同じタイル並びで LandUse を持つ pkl に差し替えてよい。
+    # 和集合の相方は、こちらの pkl を読む前に済ませて解放する（メモリ）。
+    # 相方は複数でよい。1本ずつ読んで解放するので同時には1つしか持たない。
+    u_list = ([] if union_cond is None else
+              ([union_cond] if not isinstance(union_cond, (list, tuple))
+               else list(union_cond)))
+    u_packs = [union_logits(c2, split, device) for c2 in u_list]
+
     pkl = dataset_path("Hiroshima",
                        pkl_override or cond.pkl_for("Hiroshima"))
     print(f"  読み込み: {pkl.name}")
@@ -104,6 +202,14 @@ def build(cond, split, device, batch_hint=500, wide=False, lu=False,
         stage2.set_wide_channels(lu)
         print(f"  広域の枝あり（{stage2.N_WIDE_CH}ch"
               f"{'・土地利用こみ' if lu else ''}）")
+    # 合意数チャネル（ch7）。和集合でないと全画素1になって情報が無い
+    if agree and not u_list:
+        sys.exit("--agree は --union-with と一緒に使ってください"
+                 "（単独では合意数が常に1で情報がありません）")
+    stage2.set_agree_channel(agree)
+    if agree:
+        print(f"  合意数チャネルあり（{1 + len(u_list)}本中いくつが陽性か / "
+              f"{1 + len(u_list)}）→ 入力 {stage2.N_CH}ch")
     C, WD, S, Y, T, B = [], [], [], [], [], []
     t0 = time.time()
     for n, k in enumerate(tiles):
@@ -140,6 +246,18 @@ def build(cond, split, device, batch_hint=500, wide=False, lu=False,
         ws = np.maximum(ws, 1e-6)
         prob, logit = wp / ws, wl / ws
         pred = prob > 0.5
+        n_pos = pred.astype(np.float32)        # 合意数（まず自分の分）
+        for u_logit, u_nos in u_packs:
+            # タイルの並びが pkl 間で同じことを確かめる。
+            # ずれていたら無関係なタイルを重ねることになる
+            assert k in u_logit, f"タイル {k} が相方に無い"
+            assert u_nos[k] == int(ds.No[k]), (
+                f"タイル番号が一致しない: {u_nos[k]} != {int(ds.No[k])}")
+            lg2, pd2 = u_logit[k]
+            logit = np.maximum(logit, lg2)   # OR は max(ロジット) と同じ
+            pred = pred | pd2
+            n_pos = n_pos + pd2.astype(np.float32)
+        ag = (n_pos / (1 + len(u_packs))) if agree else None
         gt = prep_mask(ds, k)
 
         lab, sizes = label_instances(pred, 8, 10)
@@ -151,10 +269,12 @@ def build(cond, split, device, batch_hint=500, wide=False, lu=False,
                 raise RuntimeError("土地利用こみを指定しましたが pkl に LandUse が"
                                    "ありません。*_lu.pkl の条件を指定してください")
             crops, wd, scal, ids = stage2.extract_tile(
-                D, A, logit, pred, lab, sizes, wide=True, lu_mos=lu_mos)
+                D, A, logit, pred, lab, sizes, wide=True, lu_mos=lu_mos,
+                agree=ag)
             WD.append(wd.astype(np.float16))
         else:
-            crops, scal, ids = stage2.extract_tile(D, A, logit, pred, lab, sizes)
+            crops, scal, ids = stage2.extract_tile(D, A, logit, pred, lab, sizes,
+                                                   agree=ag)
 
         gl, gs = label_instances(gt, 8, 10)
         if len(gs):
@@ -172,7 +292,8 @@ def build(cond, split, device, batch_hint=500, wide=False, lu=False,
             el = time.time() - t0
             print(f"    {n}/{len(tiles)}  {el:.0f}秒", end="\r", flush=True)
 
-    out = cache_path(cond.name, split, wide, lu)
+    out = cache_path(cond.name, split, wide, lu,
+                     union=[c2.name for c2 in u_list] or None, agree=agree)
     C = np.concatenate(C); S = np.concatenate(S)
     Y = np.concatenate(Y); T = np.concatenate(T); B = np.concatenate(B)
     kw = {"wide": np.concatenate(WD)} if wide else {}
@@ -224,8 +345,9 @@ def augment(x, jitter=0):
 def train(cond, name, device, epochs=60, batch_size=128, lr=1e-3,
           patience=12, seed=42, split_seed=42, val_frac=0.2, use_augment=False,
           no_scalar=False, no_logit=False, weight_decay=0.0, jitter=0,
-          wide=False, lu=False, no_narrow=False):
-    f = cache_path(cond.name, "val", wide, lu)
+          wide=False, lu=False, no_narrow=False, union=None, agree=False):
+    stage2.set_agree_channel(agree)
+    f = cache_path(cond.name, "val", wide, lu, union=union, agree=agree)
     if not f.exists():
         sys.exit(f"{f} がありません。先に --build を実行してください")
     z = np.load(f)
@@ -277,7 +399,11 @@ def train(cond, name, device, epochs=60, batch_size=128, lr=1e-3,
               "（地形と写真だけで分けられるかの診断）")
 
     torch.manual_seed(seed)
+    # **in_ch は必ず明示する。** Stage2Net の既定値 in_ch=N_CH は
+    # 定義時に評価されるので、set_agree_channel() では切り替わらない
+    # （wide_ch と同じ扱いにする）。
     model = stage2.Stage2Net(
+        in_ch=stage2.N_CH,
         wide_ch=stage2.N_WIDE_CH if wide else 0).to(device)
     print(f"Stage2Net パラメータ {stage2.n_params(model):,}")
     opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
@@ -350,7 +476,8 @@ def train(cond, name, device, epochs=60, batch_size=128, lr=1e-3,
                 "val_auc": float(best), "base_auc": float(base),
                 "stage1": cond.name, "crop": stage2.CROP,
                 "wide_ch": stage2.N_WIDE_CH if wide else 0,
-                "wide": bool(wide), "landuse": bool(lu)}, out)
+                "wide": bool(wide), "landuse": bool(lu),
+                "in_ch": stage2.N_CH, "agree": bool(agree)}, out)
     print("重みを保存:", out)
     return out
 
@@ -386,6 +513,11 @@ def main():
                          "hiroshima_sam_apm_lu.pkl を指定する")
     ap.add_argument("--jitter", type=int, default=0,
                     help="窓をこの画素数までずらす（オーバーラップ学習の2段目版）")
+    ap.add_argument("--agree", action="store_true",
+                    help="合意数チャネル（ch7）を足す。--union-with が必須。展望 24")
+    ap.add_argument("--union-with", nargs="*", default=None,
+                    help="和集合にする相方の条件名（展望 21）。"
+                         "ロジットは要素ごとの max、予測は OR")
     ap.add_argument("--seed", type=int, default=42,
                     help="モデル初期化とバッチ順。ゆらぎ幅を測るとき振る")
     ap.add_argument("--split-seed", type=int, default=42,
@@ -405,7 +537,9 @@ def main():
         for sp in args.splits:
             print(f"\n--- かたまりデータを作る: {sp} ---")
             build(cond, sp, device, wide=args.wide, lu=args.landuse,
-                  pkl_override=args.pkl)
+                  pkl_override=args.pkl,
+                  union_cond=[get(u) for u in args.union_with]
+                  if args.union_with else None, agree=args.agree)
     if args.train:
         print(f"\n--- 2段目を学習: {args.name} ---")
         train(cond, args.name, device, epochs=args.epochs,
@@ -414,7 +548,8 @@ def main():
               no_logit=args.no_logit, weight_decay=args.weight_decay,
               jitter=args.jitter, wide=args.wide, lu=args.landuse,
               no_narrow=args.no_narrow,
-              seed=args.seed, split_seed=args.split_seed)
+              seed=args.seed, split_seed=args.split_seed,
+              union=args.union_with, agree=args.agree)
 
 
 if __name__ == "__main__":

@@ -59,6 +59,12 @@ ARCH_JA = {
     "ASPPStride8MultiEncoderUNet": "ASPP+ストライド8",
     "SupAttnMultiEncoderUNet": "監督Attention",
     "SupAttnPerBranchMultiEncoderUNet": "監督Attention(枝別)",
+    # 族の比較用。符号化器は MultiEncoderUNet と同じで、頭だけが違う。
+    "SegFormerDual": "SegFormer",
+    "FCNDual": "FCN-8s",
+    "PSPNetDual": "PSPNet",
+    "DeepLabV3Dual": "DeepLabv3",
+    "MLPDecoderDual": "全MLPデコーダ",
 }
 
 

@@ -25,6 +25,14 @@
     ch2-4   航空写真 RGB（/255）
     ch5     混ぜたロジット（/40）。**中央タイルの外は0**
     ch6     判定対象のかたまりだけのマスク。どれを見ているかを示す
+    ch7     （和集合のときだけ）**合意数** = 陽性にしたモデル数 / 全モデル数
+
+**ch7 を足した理由（展望 24）。** 和集合はロジットの要素ごとの max なので、
+**3本全部が強く言った箇所と1本だけが言った箇所が同じ値になる。**
+本数は max から復元できないので、これは既存のどのチャネルにも無い情報である。
+14.3 で「何を足しても情報が重複している」と測ったが、合意数は重複しない。
+23.6 で「3本目が増やした外れはロジットが低い形ではない」と分かったので、
+ロジット以外の手がかりが要るという状況に正面から当たる。
 
     スカラー log1p(面積) / 細長さ / ロジット最大 / ロジット平均 / 外周までの距離
 
@@ -52,7 +60,8 @@ TILE = 128
 SLOPE_SCALE = 45.0        # 傾斜角[度]の正規化
 LOGIT_SCALE = 40.0        # ロジットの正規化。的中の中位数が約40
 N_SCALAR = 5
-N_CH = 6
+N_CH_BASE = 6     # 傾斜角・写真3・ロジット・対象マスク
+N_CH = N_CH_BASE
 N_LU = 9                  # 土地利用の区分数（landuse.CHANNEL_ORDER と同じ）
 # 広域の枝: 傾斜角1 + 写真3 + 対象のかたまり1 (+ 土地利用9)
 N_WIDE_BASE = 5
@@ -81,6 +90,17 @@ def set_wide_channels(with_landuse: bool):
     return N_WIDE_CH
 
 
+def set_agree_channel(on: bool):
+    """合意数チャネル（ch7）の有無を切り替える。
+
+    既定は無し（N_CH = 6）なので、**既存の2段目の重みは影響を受けない。**
+    和集合でないときは全画素1になって情報が無いので、足す意味がない。
+    """
+    global N_CH
+    N_CH = N_CH_BASE + (1 if on else 0)
+    return N_CH
+
+
 def _canvas(small, size=3 * TILE, channels=None):
     """中央タイルの配列を 3x3 の大きさに置く。外は0。"""
     if channels is None:
@@ -93,13 +113,15 @@ def _canvas(small, size=3 * TILE, channels=None):
 
 
 def extract_tile(dem_mos, air_mos, logit, pred, labels, sizes, crop=CROP,
-                 wide=False, lu_mos=None):
+                 wide=False, lu_mos=None, agree=None):
     """1タイル分のかたまりを切り出す。
 
     dem_mos  3x3 に貼った傾斜角 (384, 384)
     air_mos  3x3 に貼った航空写真 (384, 384, 3)
     logit    中央タイルの混ぜたロジット (128, 128)
     pred     中央タイルの二値マスク (128, 128)
+    agree    中央タイルの合意数 (128, 128) float、0〜1。None なら ch7 を作らない
+             （set_agree_channel(True) と合わせて使う）
     labels   label_instances の結果 (128, 128) int
     sizes    かたまりごとの画素数
 
@@ -115,6 +137,11 @@ def extract_tile(dem_mos, air_mos, logit, pred, labels, sizes, crop=CROP,
                 np.zeros(0, np.int32))
 
     lg_c = _canvas(logit.astype(np.float32))
+    ag_c = None if agree is None else _canvas(agree.astype(np.float32))
+    if (agree is not None) != (N_CH > N_CH_BASE):
+        raise RuntimeError(
+            f"合意数チャネルの指定が食い違っています: agree={'あり' if agree is not None else 'なし'} "
+            f"/ N_CH={N_CH}。set_agree_channel() を呼んでください")
     half = crop // 2
     hi = 3 * TILE - crop
     st4 = ndimage.generate_binary_structure(2, 1)
@@ -145,6 +172,8 @@ def extract_tile(dem_mos, air_mos, logit, pred, labels, sizes, crop=CROP,
         crops[j, 1:4] = air_mos[ys, xs].transpose(2, 0, 1) / 255.0
         crops[j, 4] = lg_c[ys, xs] / LOGIT_SCALE
         crops[j, 5] = m_c[ys, xs]
+        if ag_c is not None:
+            crops[j, 6] = ag_c[ys, xs]
 
         v = logit[sel]
         per = int(sel.sum() - ndimage.binary_erosion(sel, st4).sum())

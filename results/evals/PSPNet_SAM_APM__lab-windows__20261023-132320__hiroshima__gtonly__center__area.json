@@ -1,0 +1,21 @@
+{
+ "condition": "PSPNet_SAM_APM",
+ "eval_id": "PSPNet_SAM_APM__lab-windows__20261023-132320__hiroshima__gtonly__center__area",
+ "evaluated_at": "2026-10-23T13:23:20",
+ "f1": 0.6691,
+ "fn": 717398,
+ "fp": 1091136,
+ "machine": "lab-windows",
+ "metric_kind": "面積",
+ "n_tiles": 2964.0,
+ "note": "tileanalysis による再推論。ノートブック出力と F値 0.0001 以内で一致",
+ "precision": 0.6263,
+ "recall": 0.7182,
+ "region": "hiroshima",
+ "run_id": "PSPNet_SAM_APM__lab-windows__20261023-132320",
+ "scope": "境界",
+ "setting": "",
+ "tileset": "警戒のみ",
+ "tp": 1828673,
+ "weights_sha256": null
+}

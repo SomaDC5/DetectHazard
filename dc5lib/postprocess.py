@@ -14,6 +14,10 @@
 項目
 ----
     base         後処理を掛ける条件名（experiments/ にあること）
+    union_with   1段目を和集合にする相方の条件名（展望 21・23）。
+                 1本でも、リストで複数本でもよい。
+                 ロジットは要素ごとの max、予測は OR。省略時は単独。
+                 **3本で折り返す**（4本目は箇所F が下がる。23.3）
     inference    通常 / オーバーラップ
     feature      かたまりを並べる特徴量。logit_max / logit_mean / area
     threshold    この値**以下**のかたまりを捨てる（絶対値）
@@ -59,6 +63,16 @@ class PostProcess:
     inference: str = "オーバーラップ"
     drop_quantile: float | None = None
     model: str | None = None          # feature="stage2" のときの重みの名前
+    # 1段目を和集合にする相方の条件名。1本でも複数本でもよい（展望 21・23）
+    union_with: str | list | None = None
+
+    @property
+    def union_list(self) -> list:
+        """union_with を常にリストで返す。str 1本でも複数でも同じ扱いにする。"""
+        if not self.union_with:
+            return []
+        return ([self.union_with] if isinstance(self.union_with, str)
+                else list(self.union_with))
     label: str = ""
     note: str = ""
     status: str = "active"
@@ -80,7 +94,8 @@ def all_postprocess(include_excluded=False):
             d = yaml.safe_load(CONFIG.read_text(encoding="utf-8")) or {}
             _cache = []
             known = {"base", "threshold", "feature", "inference",
-                     "drop_quantile", "label", "note", "status", "model"}
+                     "drop_quantile", "label", "note", "status", "model",
+                     "union_with"}
             for name, v in (d.get("postprocess") or {}).items():
                 v = dict(v or {})
                 extra = {k: v.pop(k) for k in list(v) if k not in known}
@@ -119,6 +134,10 @@ def check():
             problems.append(f"後処理 '{p.name}': 同名のアンサンブルがあります")
         if p.base not in conds:
             problems.append(f"後処理 '{p.name}': base '{p.base}' が experiments/ にありません")
+        for u in p.union_list:
+            if u not in conds:
+                problems.append(f"後処理 '{p.name}': union_with '{u}' が "
+                                "experiments/ にありません")
         if p.feature not in FEATURES:
             problems.append(f"後処理 '{p.name}': feature '{p.feature}' は未知です"
                             f"（使えるのは {list(FEATURES)}）")
@@ -159,6 +178,10 @@ if __name__ == "__main__":
         print(f"{p.name}{mark}")
         print(f"  {p.display()}")
         print(f"  base       {p.base}")
+        if p.union_list:
+            print(f"  union_with {', '.join(p.union_list)}"
+                  f"（計 {1 + len(p.union_list)}本の和集合。"
+                  "ロジットは要素ごとの max、予測は OR）")
         print(f"  推論       {p.inference}（{INFERENCES[p.inference]}）")
         print(f"  特徴量     {p.feature}（{FEATURES.get(p.feature, '?')}）")
         if p.model:

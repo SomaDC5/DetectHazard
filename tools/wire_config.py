@@ -181,6 +181,160 @@ print("乱数を固定:", CFG.seed)
     return src.replace(anchor, block + anchor, 1), ["乱数の固定を追加"]
 
 
+# `model = build_model(get(CONDITION).arch)` を入れるときに要る import。
+# **モジュールごとに1行ずつ確かめる。** build_model だけ見て get を忘れ、
+# 学習の直前に NameError: name 'get' is not defined で落ちたことがある。
+REQUIRED_IMPORTS = (
+    ("from dc5lib.models import build_model", "build_model"),
+    ("from dc5lib.registry import get", "get"),
+)
+
+
+def _class_uses(name, whole):
+    """クラスが**実際に使われている**回数。
+
+    `Name(` の形だけを数える。`class Name(nn.Module)` は定義なので除き、
+    `super(Name, self)` は `Name(` の形にならないので最初から当たらない。
+
+    > **ここを間違えて自作のノートブックを壊した。**
+    > 当初 `uses - supers` としたが、supers は uses に数えられていないので
+    > 二重に引いていた。使われているクラスを「未使用」と誤判定して削除し、
+    > 残った参照が NameError になった。
+    """
+    pat = rf"(?<![\w.])(?<!class ){re.escape(name)}\s*\("
+    return len(re.findall(pat, whole))
+
+
+def _drop_main_guard(src):
+    """`if __name__ == "__main__":` のブロックを消す。
+
+    **ノートブックでは __name__ は "__main__" なので、このブロックは実行される。**
+    元のスクリプトの作者は「import したときは動かさない」つもりで書いているので、
+    ノートブックに貼ると意図と逆に動く。
+    実際に SegFormer_SAM_APM では、ここで雛形の MultiEncoderUNet が
+    instance 化されていた（24行あとの build_model で上書きされるので
+    学習するモデルは正しかったが、消し忘れた参照が残る原因になっていた）。
+    """
+    import ast as _ast
+
+    if '__name__' not in src:
+        return src, []
+    lines = src.splitlines(keepends=True)
+    out, i, done = [], 0, []
+    while i < len(lines):
+        if re.match(r'^if\s+__name__\s*==\s*[\'"]__main__[\'"]\s*:', lines[i]):
+            j = i + 1
+            while j < len(lines) and (not lines[j].strip()
+                                      or lines[j][:1].isspace()):
+                j += 1
+            done.append('if __name__ == "__main__" のブロックを削除')
+            i = j
+            continue
+        out.append(lines[i])
+        i += 1
+    if not done:
+        return src, []
+    cut = "".join(out)
+    try:
+        _ast.parse(cut)
+    except SyntaxError:
+        return src, []
+    return cut, done
+
+
+def _drop_unused_model_class(src, whole):
+    """build_model を使うのに残っている、使われないモデルクラスを消す。
+
+    元のノートブックを雛形にすると、モデルクラスの直書きがそのまま残る。
+    実際に学習されるのは build_model が返すクラスなので、
+    **残っていると「このクラスを学習している」と誤解する。**
+
+    **判定はノート全体（whole）で行う。** クラスの定義と使用は別のセルに
+    あるので、編集するセル（src）だけを見ると
+      ・build_model の行が別のセルにあるので発火しない
+      ・別のセルでの使用を見落として消してしまう
+    のどちらかになる。
+
+    安全のため、使用が1つでもあれば消さない。
+    消したあとに ast で解釈できなければ元に戻す。
+    """
+    import ast as _ast
+
+    if "build_model(get(CONDITION).arch)" not in whole:
+        return src, []
+    done = []
+    for cname in re.findall(r"^class\s+(\w+)\s*\(\s*nn\.Module", src, re.M):
+        if _class_uses(cname, whole) > 0:
+            continue
+        lines = src.splitlines(keepends=True)
+        start = next((i for i, l in enumerate(lines)
+                      if re.match(rf"^class\s+{re.escape(cname)}\s*\(", l)), None)
+        if start is None:
+            continue
+        end = len(lines)
+        for i in range(start + 1, len(lines)):
+            if lines[i].strip() and not lines[i][:1].isspace():
+                end = i
+                break
+        cut = "".join(lines[:start]) + "".join(lines[end:])
+        try:
+            _ast.parse(cut)
+        except SyntaxError:
+            continue
+        src = cut
+        done.append(f"未使用のモデルクラス {cname} を削除")
+    return src, done
+
+
+def _add_model_import(src):
+    """build_model を使うセルに、足りない import を足す。
+
+    `("モデル", ...)` の置き換えで `model = build_model(get(CONDITION).arch)`
+    を入れるが、**import は別のセルにあることが多く、取りこぼす。**
+    元のノートブックがモデルクラスを直書きしていた条件では
+    import が無いまま残り、学習の直前に NameError で落ちる。
+
+    **名前ごとに確かめる。** `from dc5lib.registry import get as _get_init`
+    のような別名つきの局所 import は `get` を定義しないので、
+    行の有無ではなく「その名前が import されているか」で判定する。
+    """
+    if "from dc5lib.losses import" not in src:
+        return src, []
+    need = []
+    for line, name in REQUIRED_IMPORTS:
+        # `import get` / `import a, get` / `import get as x` を見分ける
+        got = False
+        for ln in src.splitlines():
+            t = ln.strip()
+            if not t.startswith("from ") or " import " not in t:
+                continue
+            names = t.split(" import ", 1)[1]
+            for part in names.split(","):
+                part = part.strip()
+                if part == name or part.startswith(name + " as "):
+                    # `as` つきは別名を定義するので、素の名前は入らない
+                    if part == name:
+                        got = True
+            if got:
+                break
+        if not got:
+            need.append((line, name))
+    if not need:
+        return src, []
+
+    out, done = [], False
+    for ln in src.splitlines(keepends=True):
+        if not done and ln.lstrip().startswith("from dc5lib.losses import"):
+            nl = "\n" if ln.endswith("\n") else ""
+            for line, _ in need:
+                out.append(line + nl)
+            done = True
+        out.append(ln)
+    if not done:
+        return src, []
+    return "".join(out), [f"{n} の import を追加" for _, n in need]
+
+
 def _add_init_from(src):
     """CFG.init_from があれば、その条件の重みを読んで続きから学習する。
 
@@ -247,6 +401,9 @@ def wire(cond_dir, check_only=False):
     nb = json.load(open(p, encoding="utf-8"))
     cells = nb["cells"]
     changes, remaining = [], []
+    # ノート全体。セルをまたぐ判定（クラスの使用など）に使う
+    whole_src = "\n".join("".join(c.get("source", [])) for c in cells
+                           if c.get("cell_type") == "code")
 
     # 1) CFG セルを cell0 の直後に置く（無ければ）
     has_cfg = any("train_cfg(CONDITION)" in "".join(c["source"]) for c in cells)
@@ -305,6 +462,35 @@ def wire(cond_dir, check_only=False):
                 else:
                     new = fixed
                     changes += [f"c{ci} {d}" for d in done]
+        # ノートブックでは __name__ == "__main__" が真なので、
+        # 元スクリプトの「お試し実行」ブロックが動いてしまう。先に消す
+        if "__name__" in new:
+            fixed, done = _drop_main_guard(new)
+            if done:
+                if check_only:
+                    remaining += [f"c{ci} {d}" for d in done]
+                else:
+                    new = fixed
+                    changes += [f"c{ci} {d}" for d in done]
+        # 使われないモデルクラスの直書きを消す（紛らわしいだけで害がある）。
+        # **判定はノート全体で行う。** 定義と使用は別のセルにある
+        if "class" in new and "nn.Module" in new:
+            fixed, done = _drop_unused_model_class(new, whole_src)
+            if done:
+                if check_only:
+                    remaining += [f"c{ci} {d}" for d in done]
+                else:
+                    new = fixed
+                    changes += [f"c{ci} {d}" for d in done]
+        # build_model の import（元がモデル直書きだった条件で落ちる）
+        if "from dc5lib.losses import" in new:
+            fixed, done = _add_model_import(new)
+            if done:
+                if check_only:
+                    remaining += [f"c{ci} {d}" for d in done]
+                else:
+                    new = fixed
+                    changes += [f"c{ci} {d}" for d in done]
         # 追加学習（init_from）の重み読み込み
         if "build_model(get(CONDITION).arch)" in new:
             fixed, done = _add_init_from(new)
@@ -352,7 +538,16 @@ def main():
         if n in trained and not args.include_trained:
             print(f"  {n}: 学習済みのため飛ばす（--include-trained で対象にできます）")
             continue
+        # **変化が止まるまで繰り返す。** whole_src は wire() の入口で一度だけ
+        # 作るので、あるセルを書き換えた影響（お試し実行ブロックを消した結果
+        # クラスが未使用になる、など）は次の周で初めて見える。
         out = wire(os.path.join(str(root), n), check_only=args.check)
+        if out and not args.check:
+            for _ in range(2):
+                more = wire(os.path.join(str(root), n), check_only=False)
+                if not more:
+                    break
+                out = list(out) + list(more)
         if out is None:
             print(f"  {n}: ノートブック無し")
         elif out:

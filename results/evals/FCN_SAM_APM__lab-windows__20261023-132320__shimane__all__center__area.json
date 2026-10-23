@@ -1,0 +1,21 @@
+{
+ "condition": "FCN_SAM_APM",
+ "eval_id": "FCN_SAM_APM__lab-windows__20261023-132320__shimane__all__center__area",
+ "evaluated_at": "2026-10-23T13:23:20",
+ "f1": 0.5426,
+ "fn": 3789225,
+ "fp": 3649755,
+ "machine": "lab-windows",
+ "metric_kind": "面積",
+ "n_tiles": 24569.0,
+ "note": "tileanalysis による再推論。ノートブック出力と F値 0.0001 以内で一致",
+ "precision": 0.5473,
+ "recall": 0.538,
+ "region": "shimane",
+ "run_id": "FCN_SAM_APM__lab-windows__20261023-132320",
+ "scope": "境界",
+ "setting": "",
+ "tileset": "全件",
+ "tp": 4412310,
+ "weights_sha256": null
+}

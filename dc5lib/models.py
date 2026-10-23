@@ -1501,6 +1501,507 @@ class TripleEncoderUNet(nn.Module):
         return self.out_conv(d1)
 
 
+# ---------------------------------------------------------------- SegFormer
+# SegFormer（Mix Transformer + 全MLPデコーダ）を自分で書いたもの。
+#
+# なぜ自分で書くのか（修士論文の構成.md 3.3）
+# ------------------------------------------
+# 目的は「アーキテクチャの族を変えても精度の帯に入る」ことを示すことである。
+# transformers の SegformerForSemanticSegmentation を使うと
+#   ・ImageNet 事前学習の重みが入り、**族の違いと事前学習の有無が混ざる**
+#   ・既存40条件はすべてゼロから学習しているので比較にならない
+# ので、**ゼロから学習できる自己完結の実装**を置く。torch だけで動く。
+#
+# 規模は SegFormer-B0 に合わせた（embed_dims [32,64,160,256]）。
+# 符号化器は入力の種類ごとに2本に分ける。3.2 で Early 融合（入力を連結して
+# 1本に通す）が明確に悪い（面積F 0.6363）と測れているので、
+# **融合位置を揃えないと「族の違い」ではなく「融合位置の違い」を測ってしまう。**
+
+
+def _mit_init(m):
+    """SegFormer / ViT 系の標準の初期化。
+
+    **PyTorch の既定（Linear は kaiming_uniform）では学習が立ち上がらない。**
+    実際に、これを入れずに学習した1本目は検証F値 0.4873 で止まった
+    （出発点 0.6691。帯 0.0024 の 75倍下）。
+    最良が ep20 でその後100エポック更新が無く、
+    **早期に悪い解に落ちて抜け出せない**という形だった。
+
+    内訳は公式実装（NVlabs/SegFormer）と同じにしてある。
+
+        Linear      切断正規分布 std=0.02、バイアスは 0
+        LayerNorm   weight=1、bias=0
+        Conv2d      正規分布 std=sqrt(2/fan_out)、バイアスは 0
+
+    Conv2d の fan_out は**出力チャネル側**で数える（kernel^2 * out / groups）。
+    Mix-FFN の深さ方向畳み込みは groups=dim なので、ここを割らないと
+    分散が dim 倍小さくなる。
+    """
+    import math
+
+    if isinstance(m, nn.Linear):
+        nn.init.trunc_normal_(m.weight, std=0.02)
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
+    elif isinstance(m, nn.LayerNorm):
+        nn.init.ones_(m.weight)
+        nn.init.zeros_(m.bias)
+    elif isinstance(m, nn.Conv2d):
+        fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+        fan_out //= max(m.groups, 1)
+        nn.init.normal_(m.weight, 0.0, math.sqrt(2.0 / fan_out))
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
+
+
+class _DWConv(nn.Module):
+    """Mix-FFN の中の 3x3 深さ方向畳み込み。位置符号の代わりになる。"""
+
+    def __init__(self, dim):
+        super().__init__()
+        self.dw = nn.Conv2d(dim, dim, 3, 1, 1, groups=dim)
+
+    def forward(self, x, h, w):
+        b, n, c = x.shape
+        x = x.transpose(1, 2).reshape(b, c, h, w)
+        x = self.dw(x)
+        return x.flatten(2).transpose(1, 2)
+
+
+class _MixFFN(nn.Module):
+    """Linear → 3x3 深さ方向畳み込み → GELU → Linear。"""
+
+    def __init__(self, dim, hidden):
+        super().__init__()
+        self.fc1 = nn.Linear(dim, hidden)
+        self.dw = _DWConv(hidden)
+        self.act = nn.GELU()
+        self.fc2 = nn.Linear(hidden, dim)
+
+    def forward(self, x, h, w):
+        return self.fc2(self.act(self.dw(self.fc1(x), h, w)))
+
+
+class _EffAttn(nn.Module):
+    """空間を縮めた自己注意。K と V を sr 倍に縮めて計算量を落とす。
+
+    注意の計算量は本来 O(N^2)（N = H*W）だが、K,V を sr^2 分の1に縮めることで
+    O(N^2 / sr^2) になる。128x128 の入力でも段1（32x32）が扱える。
+    """
+
+    def __init__(self, dim, heads, sr):
+        super().__init__()
+        assert dim % heads == 0, (dim, heads)
+        self.heads = heads
+        self.scale = (dim // heads) ** -0.5
+        self.q = nn.Linear(dim, dim)
+        self.kv = nn.Linear(dim, dim * 2)
+        self.proj = nn.Linear(dim, dim)
+        self.sr = sr
+        if sr > 1:
+            self.reduce = nn.Conv2d(dim, dim, sr, sr)
+            self.norm = nn.LayerNorm(dim)
+
+    def forward(self, x, h, w):
+        b, n, c = x.shape
+        q = (self.q(x).reshape(b, n, self.heads, c // self.heads)
+             .permute(0, 2, 1, 3))
+        if self.sr > 1:
+            y = x.transpose(1, 2).reshape(b, c, h, w)
+            y = self.reduce(y).flatten(2).transpose(1, 2)
+            y = self.norm(y)
+        else:
+            y = x
+        kv = (self.kv(y).reshape(b, -1, 2, self.heads, c // self.heads)
+              .permute(2, 0, 3, 1, 4))
+        k, v = kv[0], kv[1]
+        a = (q @ k.transpose(-2, -1)) * self.scale
+        a = a.softmax(dim=-1)
+        out = (a @ v).transpose(1, 2).reshape(b, n, c)
+        return self.proj(out)
+
+
+class _MiTBlock(nn.Module):
+    def __init__(self, dim, heads, sr, mlp_ratio=4):
+        super().__init__()
+        self.n1 = nn.LayerNorm(dim)
+        self.attn = _EffAttn(dim, heads, sr)
+        self.n2 = nn.LayerNorm(dim)
+        self.ffn = _MixFFN(dim, dim * mlp_ratio)
+
+    def forward(self, x, h, w):
+        x = x + self.attn(self.n1(x), h, w)
+        x = x + self.ffn(self.n2(x), h, w)
+        return x
+
+
+class _OverlapPatchEmbed(nn.Module):
+    """重なりのあるパッチ分割。畳み込みなので境界が切れない。"""
+
+    def __init__(self, in_ch, dim, k, stride):
+        super().__init__()
+        self.proj = nn.Conv2d(in_ch, dim, k, stride, k // 2)
+        self.norm = nn.LayerNorm(dim)
+
+    def forward(self, x):
+        x = self.proj(x)
+        h, w = x.shape[2], x.shape[3]
+        x = x.flatten(2).transpose(1, 2)
+        return self.norm(x), h, w
+
+
+class MiTEncoder(nn.Module):
+    """Mix Transformer の符号化器。4段の特徴マップを返す。
+
+    128x128 の入力に対して 32 / 16 / 8 / 4 の解像度になる。
+    """
+
+    DIMS = (32, 64, 160, 256)
+    DEPTHS = (2, 2, 2, 2)
+    HEADS = (1, 2, 5, 8)
+    SRS = (8, 4, 2, 1)
+
+    def __init__(self, in_ch=3):
+        super().__init__()
+        self.embeds = nn.ModuleList()
+        self.stages = nn.ModuleList()
+        self.norms = nn.ModuleList()
+        prev = in_ch
+        for s, dim in enumerate(self.DIMS):
+            k, st = (7, 4) if s == 0 else (3, 2)
+            self.embeds.append(_OverlapPatchEmbed(prev, dim, k, st))
+            self.stages.append(nn.ModuleList(
+                [_MiTBlock(dim, self.HEADS[s], self.SRS[s])
+                 for _ in range(self.DEPTHS[s])]))
+            self.norms.append(nn.LayerNorm(dim))
+            prev = dim
+        self.apply(_mit_init)          # **既定の初期化では学習が立ち上がらない**
+
+    def forward(self, x):
+        out = []
+        for emb, blocks, norm in zip(self.embeds, self.stages, self.norms):
+            x, h, w = emb(x)
+            for blk in blocks:
+                x = blk(x, h, w)
+            x = norm(x)
+            b, n, c = x.shape
+            x = x.transpose(1, 2).reshape(b, c, h, w)
+            out.append(x)
+        return out
+
+
+class SegFormerDual(nn.Module):
+    """2本の Mix Transformer 符号化器 + 全MLPデコーダ。
+
+    デコーダは SegFormer のとおり、各段の特徴を 1x1 畳み込みで同じ次元に
+    そろえ、最も細かい段の解像度（32x32）に上げてから連結して融合する。
+    **転置畳み込みもスキップ接続も使わない**ので、U-Net とは系統が違う。
+
+    forward の引数は MultiEncoderUNet と同じ (dem, air) にしてある。
+    """
+
+    def __init__(self, out_channels=1, dec_dim=256, p_drop=0.1):
+        super().__init__()
+        self.slope_enc = MiTEncoder(in_ch=1)        # 地形量
+        self.curv_enc = MiTEncoder(in_ch=3)         # 航空写真
+        dims = MiTEncoder.DIMS
+        # 2本ぶん、4段ぶんの 1x1 畳み込み
+        self.lat = nn.ModuleList([nn.Conv2d(d, dec_dim, 1)
+                                  for d in dims for _ in (0, 1)])
+        self.fuse = nn.Sequential(
+            nn.Conv2d(dec_dim * len(dims) * 2, dec_dim, 1, bias=False),
+            nn.BatchNorm2d(dec_dim), nn.ReLU(inplace=True),
+            nn.Dropout2d(p_drop))
+        self.out_conv = nn.Conv2d(dec_dim, out_channels, 1)
+        # 符号化器は自分で初期化しているが、デコーダ側にも当てる。
+        # BatchNorm2d は _mit_init が触らないので既定（weight=1, bias=0）のまま
+        self.apply(_mit_init)
+        # **分類ヘッドは _mit_init から外す。**
+        # 1x1 で出力1チャネルなので fan_out=1 となり std=sqrt(2)=1.41 になる。
+        # 入力256チャネルの和を取るので初期の出力が標準偏差 13 まで膨らみ、
+        # 損失の clamp(-10,10) の外に 62% の画素が出て**勾配が来なくなる。**
+        # U-Net 系は初期の出力 std が 0.35 で、外に出る画素は 0% である。
+        # mmsegmentation の慣習に合わせて小さく初期化する。
+        nn.init.normal_(self.out_conv.weight, 0.0, 0.01)
+        nn.init.zeros_(self.out_conv.bias)
+
+    def forward(self, dem, air):
+        fs = self.slope_enc(dem)
+        fa = self.curv_enc(air)
+        ref = fs[0].shape[2:]                       # 32x32
+        feats = []
+        for i, (a, b) in enumerate(zip(fs, fa)):
+            for j, f in enumerate((a, b)):
+                g = self.lat[2 * i + j](f)
+                if g.shape[2:] != ref:
+                    g = F.interpolate(g, size=ref, mode="bilinear",
+                                      align_corners=False)
+                feats.append(g)
+        x = self.fuse(torch.cat(feats, dim=1))
+        x = self.out_conv(x)
+        return F.interpolate(x, size=dem.shape[2:], mode="bilinear",
+                             align_corners=False)
+
+# ============================================================
+# 他系統との比較（FCN / PSPNet / DeepLabv3）
+#
+# **符号化器は MultiEncoderUNet と同一にしてある。**
+# 違うのは「頭（デコーダ）」だけなので、U-Net との差を
+# 「符号化器の違い」ではなく「復号のしかたの違い」として読める。
+# SegFormerDual だけは符号化器も Mix Transformer で違うので、
+# その点は論文で明記する必要がある。
+#
+# 3本とも出力ストライド8（128x128 の入力に対して 16x16 で推論し、
+# 最後に双線形で x8 に拡大する）。各族の標準のやり方に合わせてある。
+# **この解像度は結果を左右する。** 16x16 では 1 画素が 35.8 m 四方で、
+# 危険区域のかたまりの中央値（約 81 m 四方）は 2.3 画素しかない。
+# SegFormer（1/4 解像度）が小さいかたまりでぼやけて負けたのと
+# 同じことが起きるなら、それは族の性質として現れたことになる。
+# ============================================================
+class _DualVGGEncoder(nn.Module):
+    """MultiEncoderUNet と同じ2本の符号化器。3モデルで共有する。
+
+    層の名前（slope_enc1 ... curv_enc4）も MultiEncoderUNet に合わせてある。
+    返す特徴（入力 128x128 のとき。チャネル数は2本を連結したあとの値）
+
+        f1  128ch  128x128   ストライド1
+        f2  256ch   64x64    ストライド2
+        f3  512ch   32x32    ストライド4
+        f4 1024ch   16x16    ストライド8   ← ここで止める
+
+    MultiEncoderUNet はこの先に pool4（16x16 → 8x8）とボトルネックがある。
+    FCN はそこまで使い、PSPNet と DeepLabv3 は f4 で止めて頭を載せる。
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.slope_enc1 = _shared_conv_block(1, 64)
+        self.slope_enc2 = _shared_conv_block(64, 128)
+        self.slope_enc3 = _shared_conv_block(128, 256)
+        self.slope_enc4 = _shared_conv_block(256, 512)
+        self.curv_enc1 = _shared_conv_block(3, 64)
+        self.curv_enc2 = _shared_conv_block(64, 128)
+        self.curv_enc3 = _shared_conv_block(128, 256)
+        self.curv_enc4 = _shared_conv_block(256, 512)
+        self.pool = nn.MaxPool2d(2)
+        self.dropout2 = nn.Dropout(0.25)       # MultiEncoderUNet と同じ位置
+
+    DIMS = (64, 128, 256, 512)      # 1本あたり。連結すると2倍
+
+    def forward_split(self, dem, air):
+        """2本を連結せずに返す。(地形の4段, 航空写真の4段)
+
+        全MLPデコーダ（`MLPDecoderDual`）は SegFormer と同じく
+        **枝ごとに 1x1 を当てて連結する**ので、連結前の形が要る。
+        """
+        s1 = self.slope_enc1(dem)
+        s2 = self.slope_enc2(self.pool(s1))
+        s3 = self.slope_enc3(self.pool(s2))
+        s4 = self.dropout2(self.slope_enc4(self.pool(s3)))
+
+        c1 = self.curv_enc1(air)
+        c2 = self.curv_enc2(self.pool(c1))
+        c3 = self.curv_enc3(self.pool(c2))
+        c4 = self.dropout2(self.curv_enc4(self.pool(c3)))
+        return [s1, s2, s3, s4], [c1, c2, c3, c4]
+
+    def forward(self, dem, air):
+        fs, fa = self.forward_split(dem, air)
+        return [torch.cat([a, b], dim=1) for a, b in zip(fs, fa)]
+
+
+class FCNDual(nn.Module):
+    """FCN（Long+ 2015）。**デコーダを持たない。**
+
+    各段の特徴を 1x1 でクラス数まで落とした「スコア」を作り、
+    粗いスコアを拡大して細かいスコアに足していくだけで出力にする。
+    転置畳み込みの積み上げも、特徴どうしの連結もしない。
+
+    元論文の FCN-8s は fc7(s32) / pool4(s16) / pool3(s8) の3段を足すが、
+    本研究の符号化器は s16 までしかないので、ここでは
+
+        ボトルネック(s16) → x2 拡大 → f4(s8) のスコアに加算
+                           → x8 拡大して 128x128
+
+    の2段にしてある。最後の拡大が x8 なので呼び名は FCN-8s のままでよい。
+    """
+
+    def __init__(self, out_channels=1):
+        super().__init__()
+        self.enc = _DualVGGEncoder()
+        # MultiEncoderUNet の fc 層にあたる部分（pool4 のあと）
+        self.pool4 = nn.MaxPool2d(2)
+        self.bottleneck = _shared_conv_block(1024, 1024)
+        self.dropout = nn.Dropout(0.5)         # MultiEncoderUNet と同じ
+        self.score_fc = nn.Conv2d(1024, out_channels, 1)    # s16
+        self.score4 = nn.Conv2d(1024, out_channels, 1)      # s8
+        # **スキップ側のスコアは 0 から始める。**
+        # 元論文も同じで、まず粗いスコアだけで学習が進み、
+        # 細かい段が必要になった分だけ効いてくる。
+        nn.init.zeros_(self.score4.weight)
+        nn.init.zeros_(self.score4.bias)
+
+    def forward(self, dem, air):
+        _, _, _, f4 = self.enc(dem, air)
+        fc = self.dropout(self.bottleneck(self.pool4(f4)))
+        x = self.score_fc(fc)
+        x = F.interpolate(x, size=f4.shape[2:], mode="bilinear",
+                          align_corners=False)
+        x = x + self.score4(f4)
+        return F.interpolate(x, size=dem.shape[2:], mode="bilinear",
+                             align_corners=False)
+
+
+class _PyramidPooling(nn.Module):
+    """PSPNet のピラミッドプーリング。特徴マップを 1/2/3/6 分割して平均する。
+
+    16x16 の段（1画素 = 35.8 m）での各枝の見る範囲。
+
+      枝     区画      実寸
+      1x1    全体      573 m   タイル全体の性格（市街地か山林か）
+      2x2    8x8px     287 m
+      3x3    約5px     191 m
+      6x6    約3px      96 m   ← かたまりの典型サイズ（約81m四方）に近い
+    """
+
+    def __init__(self, in_ch, branch_ch=256, bins=(1, 2, 3, 6)):
+        super().__init__()
+        self.stages = nn.ModuleList([
+            nn.Sequential(
+                nn.AdaptiveAvgPool2d(b),
+                nn.Conv2d(in_ch, branch_ch, 1, bias=False),
+                nn.BatchNorm2d(branch_ch), nn.ReLU(inplace=True))
+            for b in bins])
+        self.out_ch = in_ch + branch_ch * len(bins)
+
+    def forward(self, x):
+        hw = x.shape[-2:]
+        feats = [x] + [F.interpolate(s(x), size=hw, mode="bilinear",
+                                     align_corners=False)
+                       for s in self.stages]
+        return torch.cat(feats, dim=1)
+
+
+class PSPNetDual(nn.Module):
+    """PSPNet（Zhao+ 2017）。ピラミッドプーリングで大域の文脈を足す。
+
+    f4（s8・1024ch）にピラミッドプーリングをかけ、3x3 で混ぜてから
+    1x1 で出力し、x8 に拡大する。
+
+    補助損失（aux head）は既定で切ってある。**損失を他条件と同一に保つため。**
+    ここを変えると「族の違い」と「損失の違い」が混ざる。
+    """
+
+    def __init__(self, out_channels=1, head_ch=512, p_drop=0.1):
+        super().__init__()
+        self.enc = _DualVGGEncoder()
+        self.ppm = _PyramidPooling(1024)
+        self.head = nn.Sequential(
+            nn.Conv2d(self.ppm.out_ch, head_ch, 3, padding=1, bias=False),
+            nn.BatchNorm2d(head_ch), nn.ReLU(inplace=True),
+            nn.Dropout2d(p_drop))
+        self.out_conv = nn.Conv2d(head_ch, out_channels, 1)
+
+    def forward(self, dem, air):
+        _, _, _, f4 = self.enc(dem, air)
+        x = self.out_conv(self.head(self.ppm(f4)))
+        return F.interpolate(x, size=dem.shape[2:], mode="bilinear",
+                             align_corners=False)
+
+
+class DeepLabV3Dual(nn.Module):
+    """DeepLabv3（Chen+ 2017）。ASPP で複数の広がりの文脈を同時に取る。
+
+    **拡張率は特徴マップの大きさに合わせて縮めてある。**
+    元論文は 513x513 の入力・出力ストライド16（33x33 の特徴）で (6,12,18)。
+    本研究は 128x128 の入力・ストライド8（16x16 の特徴）なので、
+    同じ比率にすると (6,12,18)x16/33 ≒ (3,6,9) になる。
+    16x16 の外にはみ出す枝は全タップが余白に当たって無意味になるため、
+    収まる範囲の (2,4,6) にした。各枝の見る範囲（1画素 = 35.8 m）。
+
+      枝           受容野    実寸
+      1x1            1px     36 m
+      3x3 d=2        5px    179 m
+      3x3 d=4        9px    322 m
+      3x3 d=6       13px    465 m
+      大域プーリング   全体    573 m
+    """
+
+    def __init__(self, out_channels=1, head_ch=256, dilations=(2, 4, 6),
+                 p_drop=0.1):
+        super().__init__()
+        self.enc = _DualVGGEncoder()
+        self.aspp = _ASPP(1024, head_ch, branch_ch=head_ch,
+                          dilations=dilations)
+        self.dropout = nn.Dropout2d(p_drop)
+        self.out_conv = nn.Conv2d(head_ch, out_channels, 1)
+
+    def forward(self, dem, air):
+        _, _, _, f4 = self.enc(dem, air)
+        x = self.out_conv(self.dropout(self.aspp(f4)))
+        return F.interpolate(x, size=dem.shape[2:], mode="bilinear",
+                             align_corners=False)
+
+
+class MLPDecoderDual(nn.Module):
+    """VGG符号化器 + SegFormer の全MLPデコーダ。
+
+    **`SegFormerDual` から符号化器だけを入れ替えたもの。**
+    `27` で「SegFormer の欠損は解像度では説明できない。残るのは符号化器」と
+    消去法で結論したが、それは実証ではなかった。この条件がその検証にあたる。
+
+      この条件が 0.48 付近 → 原因は**全MLPデコーダ**（消去法の結論が誤り）
+      この条件が 0.63 付近 → 原因は**Mix Transformer 符号化器**（結論が正しい）
+
+    デコーダは `SegFormerDual` と同一にしてある。枝ごと・段ごとに 1x1 で
+    256 次元にそろえ、**1/4 解像度（32x32）に合わせて**連結し、
+    1x1 で融合して 1x1 で出力し、双線形で 128x128 に戻す。
+    転置畳み込みもスキップ接続も使わない。
+
+    **SegFormer との違いは1点だけある。**
+    SegFormer の符号化器はいちばん細かい段が 1/4（32x32）なので、
+    デコーダは全部を「上げて」そろえる。VGG の符号化器は 1/1 と 1/2 の段を
+    持つので、その2段は「下げて」そろえることになる。
+    出力解像度（1/4）は同じに保ってあるので、比較の条件は崩れていない。
+    """
+
+    REF_STAGE = 2                   # 32x32 の段。SegFormer の出力解像度に合わせる
+
+    def __init__(self, out_channels=1, dec_dim=256, p_drop=0.1):
+        super().__init__()
+        self.enc = _DualVGGEncoder()
+        dims = _DualVGGEncoder.DIMS
+        # 2本ぶん、4段ぶんの 1x1 畳み込み（SegFormerDual と同じ並び）
+        self.lat = nn.ModuleList([nn.Conv2d(d, dec_dim, 1)
+                                  for d in dims for _ in (0, 1)])
+        self.fuse = nn.Sequential(
+            nn.Conv2d(dec_dim * len(dims) * 2, dec_dim, 1, bias=False),
+            nn.BatchNorm2d(dec_dim), nn.ReLU(inplace=True),
+            nn.Dropout2d(p_drop))
+        self.out_conv = nn.Conv2d(dec_dim, out_channels, 1)
+        # **分類ヘッドは小さく初期化する。** SegFormerDual と同じ理由で、
+        # 1x1 で出力1チャネルだと既定の初期化では初期の出力が膨らみ、
+        # 損失の clamp(-10,10) の外に出て勾配が来なくなる。
+        nn.init.normal_(self.out_conv.weight, 0.0, 0.01)
+        nn.init.zeros_(self.out_conv.bias)
+
+    def forward(self, dem, air):
+        fs, fa = self.enc.forward_split(dem, air)
+        ref = fs[self.REF_STAGE].shape[2:]          # 32x32
+        feats = []
+        for i, (a, b) in enumerate(zip(fs, fa)):
+            for j, f in enumerate((a, b)):
+                g = self.lat[2 * i + j](f)
+                if g.shape[2:] != ref:
+                    g = F.interpolate(g, size=ref, mode="bilinear",
+                                      align_corners=False)
+                feats.append(g)
+        x = self.fuse(torch.cat(feats, dim=1))
+        x = self.out_conv(x)
+        return F.interpolate(x, size=dem.shape[2:], mode="bilinear",
+                             align_corners=False)
+
+
 MODEL_CLASSES = {
     "UNet": UNet,
     "MultiEncoderUNet": MultiEncoderUNet,
@@ -1509,6 +2010,11 @@ MODEL_CLASSES = {
     "MiddleFusionUNet": MiddleFusionUNet,
     "AttentionMultiEncoderUNet": AttentionMultiEncoderUNet,
     "TransUNetDual": TransUNetDual,
+    "SegFormerDual": SegFormerDual,
+    "FCNDual": FCNDual,
+    "PSPNetDual": PSPNetDual,
+    "DeepLabV3Dual": DeepLabV3Dual,
+    "MLPDecoderDual": MLPDecoderDual,
     "DeepSupMultiEncoderUNet": DeepSupMultiEncoderUNet,
     "AllSkipDeepSupMultiEncoderUNet": AllSkipDeepSupMultiEncoderUNet,
     "SupAttnMultiEncoderUNet": SupAttnMultiEncoderUNet,

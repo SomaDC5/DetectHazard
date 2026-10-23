@@ -1,0 +1,40 @@
+# 実験条件の定義。フォルダを増やせば条件が増える。
+# 重みは dc5-data/weights/<name>/ にあり、ここには置かない。
+name: SegFormer_SAM_APM
+arch: SegFormerDual
+family: Transformer
+inputs:
+- key: terrain
+  source: SAM
+  channels: 1
+  field: DEM
+  note: 傾斜角マップ(度)
+- key: airphoto
+  source: APM
+  channels: 3
+  field: AirPhoto
+  note: 航空写真 RGB
+augment: false
+bg_ratio: 0.0
+status: done
+label: SegFormer SAM+APM
+note: SegFormer（Mix Transformer + 全MLPデコーダ）をゼロから学習する。目的はアーキテクチャの族を変えても精度の帯に入ることを示すこと（修士論文の構成.md
+  3.3）。transformers の事前学習モデルを使わないのは、族の違いと事前学習の有無が混ざるため。符号化器は入力ごとに2本に分ける（3.2 で Early
+  融合が明確に悪いので、融合位置を揃えないと族の違いを測れない）。規模は SegFormer-B0 相当で 7.42M パラメータ。学習の設定は既存条件と同一にしてある。
+dataset:
+  Hiroshima: hiroshima_sam_apm.pkl
+  Shimane: shimane_sam_apm.pkl
+train:
+  epochs: 1000
+  batch_size: 32
+  lr: 0.0001
+  seed: 42
+  split: 6:2:2 (train_test_split test_size=0.2 -> 0.25, random_state=42)
+  model_selection: 検証データのF値が最良のエポック
+  loss:
+    type: focal_tversky
+    alpha: 0.7
+    beta: 0.3
+    gamma: 0.75
+  augment_params: null
+  early_stop_patience: 100
