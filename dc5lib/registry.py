@@ -64,6 +64,7 @@ ARCH_JA = {
     "FCNDual": "FCN-8s",
     "PSPNetDual": "PSPNet",
     "DeepLabV3Dual": "DeepLabv3",
+    "MLPDecoderDual": "全MLPデコーダ",
 }
 
 

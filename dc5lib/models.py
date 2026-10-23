@@ -1786,7 +1786,14 @@ class _DualVGGEncoder(nn.Module):
         self.pool = nn.MaxPool2d(2)
         self.dropout2 = nn.Dropout(0.25)       # MultiEncoderUNet と同じ位置
 
-    def forward(self, dem, air):
+    DIMS = (64, 128, 256, 512)      # 1本あたり。連結すると2倍
+
+    def forward_split(self, dem, air):
+        """2本を連結せずに返す。(地形の4段, 航空写真の4段)
+
+        全MLPデコーダ（`MLPDecoderDual`）は SegFormer と同じく
+        **枝ごとに 1x1 を当てて連結する**ので、連結前の形が要る。
+        """
         s1 = self.slope_enc1(dem)
         s2 = self.slope_enc2(self.pool(s1))
         s3 = self.slope_enc3(self.pool(s2))
@@ -1796,9 +1803,11 @@ class _DualVGGEncoder(nn.Module):
         c2 = self.curv_enc2(self.pool(c1))
         c3 = self.curv_enc3(self.pool(c2))
         c4 = self.dropout2(self.curv_enc4(self.pool(c3)))
+        return [s1, s2, s3, s4], [c1, c2, c3, c4]
 
-        return [torch.cat([a, b], dim=1)
-                for a, b in ((s1, c1), (s2, c2), (s3, c3), (s4, c4))]
+    def forward(self, dem, air):
+        fs, fa = self.forward_split(dem, air)
+        return [torch.cat([a, b], dim=1) for a, b in zip(fs, fa)]
 
 
 class FCNDual(nn.Module):
@@ -1934,6 +1943,65 @@ class DeepLabV3Dual(nn.Module):
                              align_corners=False)
 
 
+class MLPDecoderDual(nn.Module):
+    """VGG符号化器 + SegFormer の全MLPデコーダ。
+
+    **`SegFormerDual` から符号化器だけを入れ替えたもの。**
+    `27` で「SegFormer の欠損は解像度では説明できない。残るのは符号化器」と
+    消去法で結論したが、それは実証ではなかった。この条件がその検証にあたる。
+
+      この条件が 0.48 付近 → 原因は**全MLPデコーダ**（消去法の結論が誤り）
+      この条件が 0.63 付近 → 原因は**Mix Transformer 符号化器**（結論が正しい）
+
+    デコーダは `SegFormerDual` と同一にしてある。枝ごと・段ごとに 1x1 で
+    256 次元にそろえ、**1/4 解像度（32x32）に合わせて**連結し、
+    1x1 で融合して 1x1 で出力し、双線形で 128x128 に戻す。
+    転置畳み込みもスキップ接続も使わない。
+
+    **SegFormer との違いは1点だけある。**
+    SegFormer の符号化器はいちばん細かい段が 1/4（32x32）なので、
+    デコーダは全部を「上げて」そろえる。VGG の符号化器は 1/1 と 1/2 の段を
+    持つので、その2段は「下げて」そろえることになる。
+    出力解像度（1/4）は同じに保ってあるので、比較の条件は崩れていない。
+    """
+
+    REF_STAGE = 2                   # 32x32 の段。SegFormer の出力解像度に合わせる
+
+    def __init__(self, out_channels=1, dec_dim=256, p_drop=0.1):
+        super().__init__()
+        self.enc = _DualVGGEncoder()
+        dims = _DualVGGEncoder.DIMS
+        # 2本ぶん、4段ぶんの 1x1 畳み込み（SegFormerDual と同じ並び）
+        self.lat = nn.ModuleList([nn.Conv2d(d, dec_dim, 1)
+                                  for d in dims for _ in (0, 1)])
+        self.fuse = nn.Sequential(
+            nn.Conv2d(dec_dim * len(dims) * 2, dec_dim, 1, bias=False),
+            nn.BatchNorm2d(dec_dim), nn.ReLU(inplace=True),
+            nn.Dropout2d(p_drop))
+        self.out_conv = nn.Conv2d(dec_dim, out_channels, 1)
+        # **分類ヘッドは小さく初期化する。** SegFormerDual と同じ理由で、
+        # 1x1 で出力1チャネルだと既定の初期化では初期の出力が膨らみ、
+        # 損失の clamp(-10,10) の外に出て勾配が来なくなる。
+        nn.init.normal_(self.out_conv.weight, 0.0, 0.01)
+        nn.init.zeros_(self.out_conv.bias)
+
+    def forward(self, dem, air):
+        fs, fa = self.enc.forward_split(dem, air)
+        ref = fs[self.REF_STAGE].shape[2:]          # 32x32
+        feats = []
+        for i, (a, b) in enumerate(zip(fs, fa)):
+            for j, f in enumerate((a, b)):
+                g = self.lat[2 * i + j](f)
+                if g.shape[2:] != ref:
+                    g = F.interpolate(g, size=ref, mode="bilinear",
+                                      align_corners=False)
+                feats.append(g)
+        x = self.fuse(torch.cat(feats, dim=1))
+        x = self.out_conv(x)
+        return F.interpolate(x, size=dem.shape[2:], mode="bilinear",
+                             align_corners=False)
+
+
 MODEL_CLASSES = {
     "UNet": UNet,
     "MultiEncoderUNet": MultiEncoderUNet,
@@ -1946,6 +2014,7 @@ MODEL_CLASSES = {
     "FCNDual": FCNDual,
     "PSPNetDual": PSPNetDual,
     "DeepLabV3Dual": DeepLabV3Dual,
+    "MLPDecoderDual": MLPDecoderDual,
     "DeepSupMultiEncoderUNet": DeepSupMultiEncoderUNet,
     "AllSkipDeepSupMultiEncoderUNet": AllSkipDeepSupMultiEncoderUNet,
     "SupAttnMultiEncoderUNet": SupAttnMultiEncoderUNet,
