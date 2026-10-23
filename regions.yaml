@@ -7,6 +7,7 @@
 # subset      all      … その地域の全タイル
 #             holdout  … 警戒区域を含むタイルの2割（学習時と同じ分割）
 #             background … 警戒区域を含まないタイル
+#             blocktest  … 空間ブロック分割のテスト側（splits/*.csv で定義）
 regions:
   hiroshima:
     dir: Hiroshima
@@ -21,6 +22,14 @@ regions:
     role: train
     subset: background
     note: 警戒区域を1画素も含まないタイル23,332枚。学習には未使用
+
+  hiroshima_block:
+    dir: Hiroshima
+    label: 広島（ブロック分割）
+    role: train
+    subset: blocktest
+    note: 空間ブロック分割のテスト側3,673枚。splits/hiroshima_block_20km.csv で定義。
+      学習タイルからの距離で層別して評価する（第6章 6.2）
 
   shimane:
     dir: Shimane
