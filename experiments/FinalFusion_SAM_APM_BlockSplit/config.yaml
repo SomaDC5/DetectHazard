@@ -39,4 +39,4 @@ train:
     beta: 0.3
     gamma: 0.75
   augment_params: null
-  early_stop_patience: 100
+  early_stop_patience: 0   # 早期終了しない。比較相手の FinalFusion_SAM_APM が 1000 エポック回しているので手順を揃える
