@@ -108,7 +108,7 @@ def run_condition(cond, tiles, device, batch_size=32, connectivity=8, min_size=1
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--region", default="hiroshima",
-                    choices=["hiroshima", "hiroshima_bg", "shimane", "both", "all"])
+                    choices=[*config.REGIONS, "both", "all"])
     ap.add_argument("--conditions", nargs="*", default=None)
     ap.add_argument("--device", default=None)
     ap.add_argument("--batch-size", type=int, default=32)

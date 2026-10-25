@@ -16,7 +16,7 @@ inputs:
   note: 航空写真 RGB
 augment: false
 bg_ratio: 0.0
-status: planned
+status: active
 label: Final SAM+APM ブロック分割
 note: '空間ブロック分割（第6章 6.2 / リサーチマップ C）。構造・損失・学習率・seed は FinalFusion_SAM_APM と完全に同一で、**分割だけが違う**。
   既存のタイル単位の無作為分割では、テスト 2,964 枚のうち 2,838 枚（95.7%）が学習タイルと接しており、報告値は「未知の地域への汎化」ではなく「同一地域内での精度」である。

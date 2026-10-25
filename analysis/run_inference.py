@@ -35,7 +35,7 @@ def load_reference():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--region", default="both", choices=["hiroshima", "hiroshima_bg", "shimane", "both", "all"])
+    ap.add_argument("--region", default="both", choices=[*config.REGIONS, "both", "all"])
     ap.add_argument("--conditions", nargs="*", default=None,
                     help="条件名を指定（省略時は全14条件）")
     ap.add_argument("--device", default=None, help="cuda / mps / cpu（省略時は自動）")
