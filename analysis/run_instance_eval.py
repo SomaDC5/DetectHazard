@@ -59,7 +59,7 @@ def run_condition(cond, tiles, device, batch_size=32, connectivity=8, min_size=1
     model.eval()
     thr = config.THRESHOLD if prob_thr is None else prob_thr
 
-    rows, inst_rows = [], []
+    rows, inst_rows, pred_rows = [], [], []
     n = len(tiles)
     for s in range(0, n, batch_size):
         e = min(s + batch_size, n)
@@ -85,6 +85,13 @@ def run_condition(cond, tiles, device, batch_size=32, connectivity=8, min_size=1
                         gt[k], pred[k], connectivity=connectivity, min_size=min_size):
                     ir["tile_no"] = tiles.no[s + k]
                     inst_rows.append(ir)
+                # **予測側も残す。** 正解側だけでは再現率しか層別できない。
+                # 外れた予測はどの正解にも属さないので、適合率を要因別に
+                # 見るにはこちらが要る。
+                for pr in instances.per_pred_instance(
+                        gt[k], pred[k], connectivity=connectivity, min_size=min_size):
+                    pr["tile_no"] = tiles.no[s + k]
+                    pred_rows.append(pr)
 
         if (s // batch_size) % 20 == 0:
             print(f"    {e}/{n}", end="\r", flush=True)
@@ -94,15 +101,17 @@ def run_condition(cond, tiles, device, batch_size=32, connectivity=8, min_size=1
     df.insert(0, "condition", cond.name)
     df.insert(1, "region", tiles.region)
     inst = pd.DataFrame(inst_rows) if save_instances else None
-    if inst is not None and len(inst):
-        inst.insert(0, "condition", cond.name)
-        inst.insert(1, "region", tiles.region)
+    pinst = pd.DataFrame(pred_rows) if save_instances else None
+    for t in (inst, pinst):
+        if t is not None and len(t):
+            t.insert(0, "condition", cond.name)
+            t.insert(1, "region", tiles.region)
     del model
     if device.type == "mps":
         torch.mps.empty_cache()
     elif device.type == "cuda":
         torch.cuda.empty_cache()
-    return df, inst
+    return df, inst, pinst
 
 
 def main():
@@ -156,13 +165,16 @@ def main():
                                                    for c in group))
             for c in group:
                 print(f"  → {c.name}")
-                df, inst = run_condition(c, tiles, device, args.batch_size,
-                                         args.connectivity, args.min_size,
-                                         args.prob_thr, args.save_instances)
+                df, inst, pinst = run_condition(c, tiles, device, args.batch_size,
+                                                args.connectivity, args.min_size,
+                                                args.prob_thr, args.save_instances)
                 df.to_csv(path(c.name, region), index=False)
                 if inst is not None and len(inst):
                     inst.to_csv(os.path.join(
                         INSTANCES_DIR, f"{c.name}__{region}__gt.csv"), index=False)
+                if pinst is not None and len(pinst):
+                    pinst.to_csv(os.path.join(
+                        INSTANCES_DIR, f"{c.name}__{region}__pred.csv"), index=False)
                 for name in SETTINGS:
                     r = instances.summarize_setting(df, name)
                     print(f"     {name:<30} R={r['箇所Recall']:.4f} "

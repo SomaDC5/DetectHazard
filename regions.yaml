@@ -7,6 +7,7 @@
 # subset      all      … その地域の全タイル
 #             holdout  … 警戒区域を含むタイルの2割（学習時と同じ分割）
 #             background … 警戒区域を含まないタイル
+#             gtonly     … 警戒区域を含むタイルだけ（土俵を揃える用）
 #             blocktest  … 空間ブロック分割のテスト側（splits/*.csv で定義）
 regions:
   hiroshima:
@@ -30,6 +31,15 @@ regions:
     subset: blocktest
     note: 空間ブロック分割のテスト側3,673枚。splits/hiroshima_block_20km.csv で定義。
       学習タイルからの距離で層別して評価する（第6章 6.2）
+
+  shimane_gt:
+    dir: Shimane
+    label: 島根（正解ありタイルのみ）
+    role: eval
+    subset: gtonly
+    note: '警戒区域を含む9,679枚だけ。広島は正解ありタイルしか評価していないので、
+      適合率を比べるときはこちらで揃える（第6章）。コロンを含む語はYAMLが
+      マッピングと誤読するので、この note は引用符で囲んである'
 
   shimane:
     dir: Shimane

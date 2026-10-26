@@ -327,6 +327,49 @@ def per_gt_instance(gt_mask, pred_mask, connectivity=8, min_size=10):
     return rows
 
 
+def per_pred_instance(gt_mask, pred_mask, connectivity=8, min_size=10):
+    """**予測**の箇所を 1 行ずつ書き出す。`per_gt_instance` の裏返し。
+
+    正解側だけでは**再現率しか層別できない。** 外れた予測はどの正解にも
+    属さないので、適合率を要因別に見るにはこちらが要る。
+
+    列
+        pred_area      その予測の画素数
+        cov_pred       |p ∩ 正解全体| / |p|　… 被覆方式の Precision 判定に使う値
+        best_iou       いちばん重なった正解との IoU
+        best_gt_area   その正解の画素数
+        n_gt_touch     重なった正解の数（2 以上なら飲み込み）
+        isolated       どの正解にも 1 画素も重ならない（まったくの空振り）
+    """
+    gt_lab, gt_sizes = label_instances(gt_mask, connectivity, min_size)
+    pred_lab, pred_sizes = label_instances(pred_mask, connectivity, min_size)
+    m, n = len(gt_sizes), len(pred_sizes)
+    if n == 0:
+        return []
+    if m == 0:
+        return [dict(pred_area=int(a), cov_pred=0.0, best_iou=0.0,
+                     best_gt_area=0, n_gt_touch=0, isolated=True)
+                for a in pred_sizes]
+
+    O = overlap_matrix(gt_lab, m, pred_lab, n)
+    union = gt_sizes[:, None] + pred_sizes[None, :] - O
+    iou = np.where(union > 0, O / np.maximum(union, 1), 0.0)
+
+    rows = []
+    for j in range(n):
+        i = int(iou[:, j].argmax())
+        has = O[:, j].sum() > 0
+        rows.append(dict(
+            pred_area=int(pred_sizes[j]),
+            cov_pred=float(O[:, j].sum() / pred_sizes[j]),
+            best_iou=float(iou[i, j]),
+            best_gt_area=int(gt_sizes[i]) if has else 0,
+            n_gt_touch=int((O[:, j] > 0).sum()),
+            isolated=bool(not has),
+        ))
+    return rows
+
+
 def summarize_setting(df, name):
     """evaluate_tile_multi の結果から、1 設定ぶんの箇所 Recall / Precision / F値。"""
     n_gt, n_pred = df["n_gt"].sum(), df["n_pred"].sum()
