@@ -181,16 +181,26 @@ def main():
     ap.add_argument("--scan", action="store_true", help="撮影年度を集める")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--test-only", action="store_true",
-                    help="テスト集合のタイルだけを対象にする")
+                    help="テスト集合のタイルだけを対象にする（広島のホールドアウト）")
+    ap.add_argument("--gt-only", action="store_true",
+                    help="正解を含むタイルだけにする（既定は regions.yaml に従う）")
     args = ap.parse_args()
 
+    # **対象は regions.yaml の subset に合わせる。**
+    # 島根は subset: all で全 24,569 タイルを評価に使うのに、
+    # 既定の gt_only=True で正解ありの 9,679 枚しか集めていなかった。
+    # 評価に使うタイルの year が空になるので、既定を地域から決める。
+    from dc5lib import regions
     from analysis.run_block_split import tile_geo
-    df = tile_geo(args.region)
+    subset = regions.get(args.region).subset if args.region in regions.keys() else "all"
+    gt_only = args.gt_only or (subset != "all" and not args.test_only)
+    df = tile_geo(args.region, gt_only=gt_only)
     if args.test_only:
         from dc5lib.data import holdout_indices
         keep = set(holdout_indices(len(df)).tolist())
         df = df.iloc[sorted(keep)].reset_index(drop=True)
-    print(f"対象 {len(df)} タイル")
+    print(f"対象 {len(df)} タイル"
+          f"（subset={subset} / 正解ありのみ={gt_only}）")
 
     if args.verify or not args.scan:
         verify(df)
