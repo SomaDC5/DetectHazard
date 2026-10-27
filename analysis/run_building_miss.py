@@ -70,7 +70,9 @@ from dc5lib.registry import get                                      # noqa: E40
 T = 128
 COV_PRED = 0.3      # 予測のかたまりが「的中」とみなされる被覆
 COV_GT = 0.5        # 正解のかたまりが「検出された」とみなされる被覆
-BAND_H = 0.0071     # 広島の箇所F のゆらぎ幅
+# 箇所F のゆらぎ幅（`docs/ゆらぎ幅.md`）。**島根は広島の2.8倍広い。**
+# 広島の 0.0071 を島根に当てると、帯の中の差を「効いた」と誤読する。
+BAND = {"hiroshima": 0.0071, "shimane": 0.0198}
 RADII = (50.0, 100.0)
 
 BLD_PKL = {"Hiroshima": "hiroshima_bld.pkl", "Shimane": "shimane_bld.pkl"}
@@ -228,7 +230,8 @@ def compare(df, flag, yes, no):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--condition", default="FinalFusion_SAM_APM_OverlapTrain")
-    ap.add_argument("--region", default="hiroshima", choices=["hiroshima"])
+    ap.add_argument("--region", default="hiroshima",
+                    choices=["hiroshima", "shimane"])
     ap.add_argument("--device", default=None)
     ap.add_argument("--save", action="store_true",
                     help="かたまり表を cache/analysis/building/ に残す")
@@ -237,6 +240,7 @@ def main():
     cond = get(a.condition)
     device = torch.device(a.device) if a.device else pick_device()
     dirname = REGION_DIR[a.region]
+    BAND_H = BAND[a.region]
     print(f"条件 {cond.name} / 地域 {a.region} / device {device}")
 
     # --- 建物と格子。**タイル番号の一致を必ず確かめる** ---

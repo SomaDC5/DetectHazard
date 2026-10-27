@@ -50,7 +50,13 @@ except Exception:
 
 from dc5lib import paths                                            # noqa: E402
 
-BAND_H = 0.0071
+BAND = {"hiroshima": 0.0071, "shimane": 0.0198}
+
+# 「古い写真」の境目。**地域で変える。**
+#   広島は 2018 / 2022 / 2023 の3段しか無い（2020年は1枚）。変化が乏しい
+#   島根は 2009〜2024 に散っており、23% が 2017年以前（`30`）。
+#   **こちらのほうが教授の指摘を強く試せる。**
+CUT = {"hiroshima": 2018, "shimane": 2017}
 
 
 def load(cond, region):
@@ -93,7 +99,10 @@ def rate_table(df, flag, title):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--condition", default="FinalFusion_SAM_APM_OverlapTrain")
-    ap.add_argument("--region", default="hiroshima")
+    ap.add_argument("--region", default="hiroshima",
+                    choices=["hiroshima", "shimane"])
+    ap.add_argument("--cut", type=int, default=None,
+                    help="これ以下の年を『古い写真』とする（既定は CUT）")
     a = ap.parse_args()
 
     p, g = load(a.condition, a.region)
@@ -103,7 +112,9 @@ def main():
           f"{int(p.apm_photo_year.notna().sum()):,} / 正解 "
           f"{int(g.apm_photo_year.notna().sum()):,}")
     print()
-    print("※ 建物データは2025/2026年時点（`38.2`）。写真は2018〜2023年。")
+    yrs = sub_years = p.apm_photo_year.dropna()
+    print(f"※ 建物データは2025/2026年時点（`38.2`）。写真は "
+          f"{int(yrs.min())}〜{int(yrs.max())}年。")
     print("   「写真が古い × いま建物がある」= 写真に写っていない"
           "可能性のある人家。")
     print()
@@ -114,15 +125,16 @@ def main():
     rate_table(g, "found", "")
 
     sub = g[g.apm_photo_year.notna()]
-    old = sub.apm_photo_year <= 2018
-    print("【まとめ】検出率")
-    print(f"{'':<26}{'写真 2018':>11}{'写真 2022+':>12}{'差':>10}")
+    cut = a.cut if a.cut is not None else CUT[a.region]
+    old = sub.apm_photo_year <= cut
+    print(f"【まとめ】検出率（{cut}年以下を『古い』とする）")
+    print(f"{'':<26}{f'写真 <={cut}':>11}{f'写真 >{cut}':>12}{'差':>10}")
     for hb, nm in ((True, "いま建物がある"), (False, "いま建物が無い")):
         a_ = sub.loc[old & (sub.has_bld == hb), "found"].mean()
         b_ = sub.loc[~old & (sub.has_bld == hb), "found"].mean()
         print(f"{nm:<26}{a_:>11.4f}{b_:>12.4f}{a_ - b_:>+10.4f}")
     print()
-    print("  教授の指摘が正しいなら、**『写真2018 × いま建物がある』の")
+    print(f"  教授の指摘が正しいなら、**『写真 <={cut} × いま建物がある』の")
     print("  検出率が際立って低い**はずである（写真の後に開発された人家）。")
     print()
 
@@ -137,7 +149,7 @@ def main():
     print("=" * 56)
     print(f"{'切り方':<34}{'低い側':>10}{'高い側':>10}{'差':>10}")
     for nm, m in (("建物の有無（1画素も無いか）", sub.has_bld),
-                  ("写真年（2018 か 2022以降）", ~old)):
+                  (f"写真年（{cut}以下か それより新しいか）", ~old)):
         lo = sub.loc[~m, "found"].mean()
         hi = sub.loc[m, "found"].mean()
         print(f"{nm:<34}{lo:>10.4f}{hi:>10.4f}{hi - lo:>+10.4f}")
