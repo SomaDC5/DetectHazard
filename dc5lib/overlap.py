@@ -163,14 +163,22 @@ class OverlapDataset:
     **土地利用も地形と同じ窓で切り出す。** ずらした先の土地利用が来ないと
     入力どうしの位置が食い違う。one-hot はここで展開する
     （pkl には区分番号1chで入っている）。
+
+    third は土地利用**以外**の3入力目（建物の被覆率など）。
+    `[C, H, W]` の uint8 をそのまま渡すと、同じ窓で切り出して /255 する
+    （航空写真と同じ扱い）。`landuse` との同時指定はできない。
     """
 
     def __init__(self, dem, air, mask, geoinfo, indices, allowed,
                  max_shift=64, tile=128, transform=None, deterministic=False,
-                 seed=42, landuse=None):
+                 seed=42, landuse=None, third=None):
         self.dem, self.air, self.mask = dem, air, mask
         # 3入力目（土地利用の区分番号）。None なら2入力のまま
         self.landuse = landuse
+        # 3入力目（土地利用以外）。被覆率などを素のまま持つ
+        self.third = third
+        if landuse is not None and third is not None:
+            raise ValueError("landuse と third は同時に渡せません")
         self.idx = [int(i) for i in indices]
         self.tile = int(tile)
         self.max_shift = int(max_shift)
@@ -198,6 +206,7 @@ class OverlapDataset:
             air = np.asarray(self.air[k])
             msk = np.asarray(self.mask[k])
             lu = None if self.landuse is None else np.asarray(self.landuse[k])
+            th = None if self.third is None else np.asarray(self.third[k])
         else:
             # 元が CHW だったかを覚えておき、切り出したあとで戻す
             _, dem_kind = _to_hwc(self.dem[k])
@@ -211,6 +220,10 @@ class OverlapDataset:
                 # 入力どうしの位置が食い違う
                 _, lu_kind = _to_hwc(self.landuse[k])
                 planes["lu"] = self._plane(self.landuse)
+            if self.third is not None:
+                # 同じ理由で、3入力目も地形と同じ窓で切る
+                _, th_kind = _to_hwc(self.third[k])
+                planes["th"] = self._plane(self.third)
             big = self.mos.build(k, planes)
             dy, dx = self._sample_shift(k)
             r, c = T + dy, T + dx
@@ -219,6 +232,8 @@ class OverlapDataset:
             msk = _from_hwc(big["mask"][r:r + T, c:c + T], msk_kind)
             lu = (None if self.landuse is None
                   else _from_hwc(big["lu"][r:r + T, c:c + T], lu_kind))
+            th = (None if self.third is None
+                  else _from_hwc(big["th"][r:r + T, c:c + T], th_kind))
 
         dem = torch.as_tensor(np.ascontiguousarray(dem)).float()
         air = torch.as_tensor(np.ascontiguousarray(air)).float() / 255.0
@@ -231,6 +246,11 @@ class OverlapDataset:
             air = air.permute(2, 0, 1)
         if self.transform:
             dem, air, msk = self.transform(dem, air, msk)
+        if th is not None:
+            t = torch.as_tensor(np.ascontiguousarray(th)).float() / 255.0
+            if t.ndim == 2:
+                t = t.unsqueeze(0)
+            return (dem, air, t), msk
         if lu is None:
             return (dem, air), msk
         from . import landuse as _lu

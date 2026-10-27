@@ -141,6 +141,48 @@ if csv_path.exists():
     if csv_path.read_bytes() != before:
         problems.append("metrics.csv が evals/ と食い違っています（作り直しました）")
 
+# 3x3 を貼る向きが、評価側と学習側とで揃っているか。
+# **揃っていなかった。** run_building_miss.py の bld_mosaic が行に経度・
+# 列に緯度を使っていたので、周囲8枚が90度回って貼られていた（2026-10-27 に直した）。
+# 中央タイルだけは正しいので、`41` の `bld_in` は無事だが近接の数字はずれていた。
+# 向きは3か所にある（run_overlap_eval.mosaic / plane_mosaic /
+# dc5lib.overlap.NeighborMosaic.build）ので、ここで突き合わせる。
+try:
+    import numpy as _np
+    from types import SimpleNamespace as _NS
+    from analysis.run_overlap_eval import (mosaic as _mos, plane_mosaic as _pm,
+                                           grid_index as _gidx, DLON, DLAT)
+    from dc5lib.overlap import NeighborMosaic as _NM
+
+    _T = 128
+    _geo, _dem, _pl = [], [], []
+    for _j in range(3):
+        for _i in range(3):
+            _geo.append((130.0 + _i * DLON, DLON / _T, 0.0,
+                         34.0 + _j * DLAT, 0.0, -DLAT / _T))
+            _dem.append(_np.full((_T, _T), 10 * _j + _i, _np.float32))
+            _pl.append(_np.full((1, _T, _T), 10 * _j + _i, _np.uint8))
+    _ds = _NS(GeoInfo=_geo, DEM=_dem,
+              AirPhoto=[_np.zeros((_T, _T, 3), _np.uint8)] * 9)
+    _gi, _gj, _cell = _gidx(_ds)
+    _k = [t for t in range(9) if _gi[t] == 1 and _gj[t] == 1][0]
+
+    def _grid(a):
+        return [[int(round(float(a[r * _T + 64, c * _T + 64]))) for c in range(3)]
+                for r in range(3)]
+
+    _a = _grid(_mos(_ds, _cell, _gi, _gj, _k)[0])
+    _b = _grid(_pm(_np.asarray(_pl), _cell, _gi, _gj, _k)[0])
+    _nm = _NM(_geo, allowed=list(range(9)), tile=_T)
+    _c = _grid(_nm.build(_k, {"x": _np.asarray(_pl)})["x"][:, :, 0])
+    for _name, _got in (("plane_mosaic", _b), ("overlap.NeighborMosaic", _c)):
+        if _got != _a:
+            problems.append(
+                f"3x3 を貼る向きが mosaic() と {_name} で違います。"
+                f"mosaic={_a} / {_name}={_got}")
+except Exception as _e:
+    problems.append(f"3x3 の向きの検査ができませんでした: {_e}")
+
 # git に大きなファイルが載っていないか
 try:
     files = subprocess.run(["git", "ls-files"], capture_output=True, text=True,

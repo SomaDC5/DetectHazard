@@ -46,6 +46,7 @@ from analysis.data import load_pkl                                   # noqa: E40
 from analysis.run_instance_eval import SETTINGS                      # noqa: E402
 from analysis.run_overlap_eval import (OFFSETS, REGION_DIR,          # noqa: E402
                                        cos_window, grid_index, mosaic,
+                                       plane_mosaic,
                                        prep_mask, target_tiles)
 from dc5lib import inputs as minputs  # noqa: E402
 from dc5lib import landuse as _landuse  # noqa: E402
@@ -79,6 +80,23 @@ def infer(cond, region, device, verbose=True):
     gi, gj, cell = grid_index(ds)
     tiles = target_tiles(ds, region, float(getattr(cond, "bg_ratio", 0.0) or 0.0))
     W = cos_window()
+    # 土地利用以外の3入力目（建物など）。pkl の値をそのまま渡す
+    t3 = minputs.third_input(cond)
+    P3 = None
+    if t3 is not None:
+        if not hasattr(ds, t3.field):
+            raise AttributeError(
+                f"{os.path.basename(pkl)} に {t3.field} がありません。"
+                f"{cond.name} の dataset を確かめてください")
+        P3 = np.asarray(getattr(ds, t3.field))
+        if P3.shape[1] != t3.channels:
+            raise ValueError(f"{t3.field} の面が {P3.shape[1]} ですが "
+                             f"config は {t3.channels} です")
+        if verbose:
+            order = list(getattr(ds, t3.field + "Order", []) or [])
+            print(f"  3入力目 {t3.field} {P3.shape[1]}面"
+                  f"{'（' + '・'.join(order) + '）' if order else ''}",
+                  flush=True)
     if verbose:
         print(f"  {len(tiles)} タイル", flush=True)
 
@@ -88,7 +106,10 @@ def infer(cond, region, device, verbose=True):
     agree = 0
     for n, k in enumerate(tiles):
         D, A, _, LU = mosaic(ds, cell, gi, gj, k)
-        dems, airs, lus = [], [], []
+        # 地形・写真と同じ鏡像で埋める（入力の面どうしを揃える）
+        M3 = (plane_mosaic(P3, cell, gi, gj, k, fill="mirror")
+              if P3 is not None else None)
+        dems, airs, lus, th3 = [], [], [], []
         for dy, dx in OFFSETS:
             r, c = 128 + dy, 128 + dx
             dems.append(D[r:r + 128, c:c + 128])
@@ -96,6 +117,8 @@ def infer(cond, region, device, verbose=True):
             if LU is not None:
                 # 地形と同じ窓で切る
                 lus.append(LU[r:r + 128, c:c + 128])
+            if M3 is not None:
+                th3.append(M3[:, r:r + 128, c:c + 128])
         dem = torch.from_numpy(np.stack(dems)[:, None]).float().to(device)
         air = (torch.from_numpy(np.stack(airs).transpose(0, 3, 1, 2))
                .float().to(device) / 255.0)
@@ -103,6 +126,9 @@ def infer(cond, region, device, verbose=True):
         # _lu.pkl を2入力の条件で読むと、余計な引数を渡して落ちる。
         extra = ([_landuse.onehot_torch(np.stack(lus), device=device)]
                  if (LU is not None and minputs.needs_landuse(cond)) else [])
+        if M3 is not None:
+            extra.append(torch.from_numpy(np.stack(th3))
+                         .to(device).float() / 255.0)
         logit = model(dem, air, *extra)[:, 0]
         pr = torch.sigmoid(logit).cpu().numpy()
         lg = logit.cpu().numpy()

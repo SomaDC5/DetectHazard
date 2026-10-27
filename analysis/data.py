@@ -163,18 +163,22 @@ class TileSet:
                                          one-hot ではない（島根全件を9chの
                                          float32 で持つと 14.5GB になる）。
                                          バッチごとに展開する。無ければ None
+    third   : uint8   [N, C, 128, 128]   土地利用**以外**の3入力目（建物など）。
+                                         pkl の値そのまま。無ければ None
     no      : list    タイル番号
     geo     : list    GeoInfo（左上経度・画素サイズなど）
     max_h / min_h : list  標高の最大・最小（起伏量の算出に使う）
     """
 
     def __init__(self, terrain, air, mask, no, geo, max_h, min_h, region, source,
-                 flags=None, landuse=None):
+                 flags=None, landuse=None, third=None, third_field=""):
         self.terrain = terrain
         self.air = air
         self.mask = mask
         # 3入力目。2入力の条件では None のままなので、既存の呼び出しは変わらない
         self.landuse = landuse
+        self.third = third
+        self.third_field = third_field
         self.no = no
         self.geo = geo
         self.max_h = max_h
@@ -189,11 +193,14 @@ class TileSet:
 
 
 def build_tileset(pkl_path, region, need_airphoto, bg_ratio=0.0, verbose=True,
-                  need_landuse=False):
+                  need_landuse=False, third_field=None):
     """pkl を1回読んで、その地域の評価用タイル集合を作る。
 
     need_landuse=True で土地利用（3入力目）も読む。既定は False なので、
     既存の2入力の条件の呼び出しは何も変わらない。
+
+    third_field に pkl の属性名（`BuildingVB` など）を渡すと、それを
+    3入力目として読む。土地利用以外の3入力目はこちらを通る。
 
     bg_ratio はノートブックの分割を再現するために要る（hiroshima_test_indices
     の説明を参照）。bg_ratio > 0 の条件では、テスト集合に背景タイルも含まれる。
@@ -294,6 +301,22 @@ def build_tileset(pkl_path, region, need_airphoto, bg_ratio=0.0, verbose=True,
         _check_landuse_order(ds, pkl_path, verbose)
         lu = np.empty((n, config.TILE_SIZE, config.TILE_SIZE), dtype=np.uint8)
 
+    th = None
+    if third_field:
+        if not hasattr(ds, third_field):
+            raise AttributeError(
+                f"{os.path.basename(pkl_path)} に {third_field} がありません。"
+                f"条件の dataset が合っているか確かめてください")
+        src3 = getattr(ds, third_field)
+        c3 = np.asarray(src3[0]).shape[0]
+        th = np.empty((n, c3, config.TILE_SIZE, config.TILE_SIZE),
+                      dtype=np.uint8)
+        if verbose:
+            order = list(getattr(ds, third_field + "Order", []) or [])
+            print(f"  3入力目 {third_field} {c3}面"
+                  f"{'（' + '・'.join(order) + '）' if order else ''}"
+                  f" を読みます", flush=True)
+
     for k, i in enumerate(sel):
         terrain[k, 0] = np.asarray(ds.DEM[i], dtype=np.float32)
         mask[k, 0] = preprocess_mask(ds.Mask[i])
@@ -301,13 +324,18 @@ def build_tileset(pkl_path, region, need_airphoto, bg_ratio=0.0, verbose=True,
             air[k] = np.transpose(np.asarray(ds.AirPhoto[i], dtype=np.uint8), (2, 0, 1))
         if lu is not None:
             lu[k] = np.asarray(ds.LandUse[i], dtype=np.uint8)
+        if th is not None:
+            th[k] = np.asarray(src3[i], dtype=np.uint8)
         no.append(ds.No[i])
         geo.append(ds.GeoInfo[i])
         max_h.append(ds.Max_H[i])
         min_h.append(ds.Min_H[i])
 
     if not air_is_view:          # ビューなら元配列が生きている必要がある
+        if th is not None:
+            del src3
         del ds
     gc.collect()
     return TileSet(terrain, air, mask, no, geo, max_h, min_h, region,
-                   os.path.basename(pkl_path), flags=flags, landuse=lu)
+                   os.path.basename(pkl_path), flags=flags, landuse=lu,
+                   third=th, third_field=third_field or "")

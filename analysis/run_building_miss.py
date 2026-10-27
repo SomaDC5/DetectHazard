@@ -59,6 +59,7 @@ except Exception:
 
 from analysis.data import load_pkl                                   # noqa: E402
 from analysis.run_overlap_eval import (REGION_DIR, grid_index,       # noqa: E402
+                                       plane_mosaic,
                                        target_tiles)
 from analysis.run_overlap_prune import infer, prune, score           # noqa: E402
 from dc5lib import building                                          # noqa: E402
@@ -104,17 +105,23 @@ def bld_mosaic(B, cell, gi, gj, k):
     **端を 0 で埋めるのは「建物が無い」という意味になる。**
     広島は県境の外も収録メッシュに入っているので、
     モザイクが欠けるのは格子の外（海側）だけである。
+
+    2026-10-27 の直し
+    -----------------
+    **ここは向きを間違えていた。** 行に経度・列に緯度を使っていたので、
+    周囲8枚が90度回って貼られていた（中央タイルだけは正しい）。
+    しかも `pixel_metres` の (my, mx) は行＝南北・列＝東西を前提にしているので、
+    距離の尺度も東西と南北が入れ替わっていた（3.60 と 4.50 m）。
+
+    影響するのは**3x3 を使う量だけ**である。
+      ずれていた   `bld_dist` / `bld_50` / `bld_100` / `house_50` / `house_100`
+      ずれていない `bld_in`（中央タイルだけを見る `bc` から出している）
+
+    向きは `run_overlap_eval.plane_mosaic` に一本化した。
+    **貼り方をここに書き写さない。**
     """
-    a, b = gi[k], gj[k]
-    out = np.zeros((3 * T, 3 * T), np.float32)
-    for p in (-1, 0, 1):
-        for q in (-1, 0, 1):
-            n = cell.get((a + p, b + q))
-            if n is None:
-                continue
-            r, c = (p + 1) * T, (q + 1) * T
-            out[r:r + T, c:c + T] = B[n, 0] / 255.0
-    return out
+    return plane_mosaic(B, cell, gi, gj, k, tile=T,
+                        fill="zero")[0].astype(np.float32) / 255.0
 
 
 def tile_maps(bcov, my, mx):

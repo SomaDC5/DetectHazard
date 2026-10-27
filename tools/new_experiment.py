@@ -34,11 +34,17 @@ from dc5lib.losses import DEFAULTS as LOSS_DEFAULTS  # noqa: E402
 
 # LU は土地利用（L03-b の9区分 one-hot）。pkl には区分番号1chで入っていて、
 # 読み込み時に one-hot に展開する（dc5lib/landuse.py の CHANNEL_ORDER）
-SOURCE_CHANNELS = {"DEM": 1, "SAM": 1, "APM": 3, "GEO": 3, "LU": 9}
+#
+# BLD は実建物の2面（建物・無壁舎）、BVB はそれに仮想建物を足した3面。
+# どちらも pkl の値（被覆率×255）をそのまま渡し、読み込み側で /255 する
+# （航空写真と同じ扱い。dc5lib/inputs.py の third_input）
+SOURCE_CHANNELS = {"DEM": 1, "SAM": 1, "APM": 3, "GEO": 3, "LU": 9,
+                   "BLD": 2, "BVB": 3}
 SOURCE_KEY = {"DEM": "terrain", "SAM": "terrain", "APM": "airphoto",
-              "GEO": "geology", "LU": "landuse"}
+              "GEO": "geology", "LU": "landuse",
+              "BLD": "building", "BVB": "building"}
 SOURCE_FIELD = {"DEM": "DEM", "SAM": "DEM", "APM": "AirPhoto", "GEO": "Geo",
-                "LU": "LandUse"}
+                "LU": "LandUse", "BLD": "Building", "BVB": "BuildingVB"}
 
 
 def parse_inputs(spec):

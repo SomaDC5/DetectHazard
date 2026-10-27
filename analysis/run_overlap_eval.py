@@ -102,6 +102,52 @@ def mosaic(ds, cell, gi, gj, k):
     return D, A, bool(ok.all()), L
 
 
+def plane_mosaic(planes, cell, gi, gj, k, tile=128, fill="mirror"):
+    """`[n, C, T, T]` の面を 3x3 に貼る。**向きは `mosaic()` と同じ。**
+
+    なぜ分けて置くか
+    ----------------
+    `mosaic()` と同じ貼り方を別の場所に書き写すと必ずずれる。
+    **実際にずれていた。** `run_building_miss.py` の `bld_mosaic` は
+    行に経度・列に緯度を使っていたので、周囲8枚が90度回って貼られていた
+    （中央タイルだけは正しい）。`41` の近接の数字がこれに当たる。
+    **向きを決めるのはこの関数だけにする。**
+
+        fill="mirror"  欠けた近傍を中央の鏡像で埋める。`mosaic()` と同じで、
+                       モデルの入力に使うときはこちら（地形・写真と揃える）
+        fill="zero"    0 で埋める。建物は「無い」を 0 で表すので、
+                       解析ではこちらが正しい
+
+    戻り値は `[C, 3T, 3T]`。dtype は入力のまま。
+    """
+    T = tile
+    P = np.asarray(planes)
+    C = P.shape[1]
+    a, b = gi[k], gj[k]
+    out = np.zeros((C, 3 * T, 3 * T), P.dtype)
+    ok = np.zeros((3, 3), bool)
+    for p in (-1, 0, 1):
+        for q in (-1, 0, 1):
+            n = cell.get((a + p, b + q))
+            if n is None:
+                continue
+            ok[p + 1, q + 1] = True
+            r, c = (1 - q) * T, (p + 1) * T   # 緯度は上が大きいので行は反転
+            out[:, r:r + T, c:c + T] = P[n]
+    if fill == "mirror":
+        for p in (-1, 0, 1):
+            for q in (-1, 0, 1):
+                if ok[p + 1, q + 1]:
+                    continue
+                r, c = (1 - q) * T, (p + 1) * T
+                cen = out[:, T:2 * T, T:2 * T]
+                out[:, r:r + T, c:c + T] = cen[:, ::(-1 if q else 1),
+                                               ::(-1 if p else 1)]
+    elif fill != "zero":
+        raise ValueError(f"fill は 'mirror' か 'zero' です: {fill}")
+    return out
+
+
 def target_tiles(ds, region, bg_ratio=0.0):
     """評価対象のタイル。広島は学習時と同じホールドアウト、島根は全件。
 
