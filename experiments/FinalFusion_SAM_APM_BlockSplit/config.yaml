@@ -1,0 +1,42 @@
+# 実験条件の定義。フォルダを増やせば条件が増える。
+# 重みは dc5-data/weights/<name>/ にあり、ここには置かない。
+name: FinalFusion_SAM_APM_BlockSplit
+arch: MultiEncoderUNet
+family: Final
+inputs:
+- key: terrain
+  source: SAM
+  channels: 1
+  field: DEM
+  note: 傾斜角マップ(度)
+- key: airphoto
+  source: APM
+  channels: 3
+  field: AirPhoto
+  note: 航空写真 RGB
+augment: false
+bg_ratio: 0.0
+status: active
+label: Final SAM+APM ブロック分割
+note: '空間ブロック分割（第6章 6.2 / リサーチマップ C）。構造・損失・学習率・seed は FinalFusion_SAM_APM と完全に同一で、**分割だけが違う**。
+  既存のタイル単位の無作為分割では、テスト 2,964 枚のうち 2,838 枚（95.7%）が学習タイルと接しており、報告値は「未知の地域への汎化」ではなく「同一地域内での精度」である。
+  20km角のブロックを学習75%/テスト25%に割り、検証は学習ブロックの内側から2割取る。分割表は splits/hiroshima_block_20km.csv に固定してある（乱数だけでは再現できないため）。
+  **評価は1本のモデルを学習データからの距離で層別して行う。** 距離別の正例率を 7.265/7.251/7.311%（差0.060点）に揃えてあるので、成績が距離で変われば自己相関のせいだと言える。学習枚数
+  8,914 枚は既存条件の 8,890 枚とほぼ同じで、データ量の差は混ざらない。'
+dataset:
+  Hiroshima: hiroshima_sam_apm.pkl
+  Shimane: shimane_sam_apm.pkl
+train:
+  epochs: 1000
+  batch_size: 32
+  lr: 0.0001
+  seed: 42
+  split: 空間ブロック20km角 学習75%/テスト25%、検証は学習側の2割（splits/hiroshima_block_20km.csv）
+  model_selection: 検証データのF値が最良のエポック
+  loss:
+    type: focal_tversky
+    alpha: 0.7
+    beta: 0.3
+    gamma: 0.75
+  augment_params: null
+  early_stop_patience: 0   # 早期終了しない。比較相手の FinalFusion_SAM_APM が 1000 エポック回しているので手順を揃える

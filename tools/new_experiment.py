@@ -117,6 +117,37 @@ def check_name(name, local, mine, others):
     return problems, hints
 
 
+# ノートブックは版が2つある。古い条件（2026-09 に作ったもの）のノートブックには
+# 下の機能が入っていない。**それを --from に指定すると、黙って古い版が複製される。**
+# 実際に FinalFusion_SAM_APM を写して、早期終了の効かない条件を作ってしまった。
+NB_FEATURES = {
+    "EARLY_STOP_PATIENCE":
+        "早期終了（config の train.early_stop_patience を読む）",
+    "build_model(get(CONDITION)":
+        "モデルを条件から引く（arch を書き換えなくてよい）",
+}
+NB_RECOMMENDED = "SegFormer_SAM_APM"
+
+
+def _warn_old_notebook(nb_path: Path, base: str):
+    """複製したノートブックが古い版なら警告する。
+
+    止めはしない。古い版でよい場合（既存条件と手順を完全に揃えたいとき）も
+    あるので、**何が入っていないかを伝えて判断を任せる。**
+    """
+    t = nb_path.read_text(encoding="utf-8")
+    missing = [v for k, v in NB_FEATURES.items() if k not in t]
+    if not missing:
+        return
+    print()
+    print(f"  ※ {base} のノートブックは古い版です。次が入っていません。")
+    for m in missing:
+        print(f"      - {m}")
+    print(f"     手順を {base} と揃えたいなら、このままで構いません。")
+    print(f"     そうでなければ --from {NB_RECOMMENDED} を使ってください。")
+    print()
+
+
 def patch_notebook_loss(nb_path: Path, cfg: dict):
     """ノートブックの損失を config 駆動に差し替える。
 
@@ -404,6 +435,7 @@ def main():
             if n:
                 msg += f" / 損失を config 駆動に差し替え（{n}箇所）"
             print(f"  複製: experiments/{a.name}/{nb.name}（{msg}）")
+            _warn_old_notebook(dst, a.base)
 
     # 何が出来たかをその場で見せる。指定し忘れ（行継続の切れなど）に気づけるように。
     try:

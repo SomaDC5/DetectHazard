@@ -218,6 +218,33 @@ def build_tileset(pkl_path, region, need_airphoto, bg_ratio=0.0, verbose=True,
             extra = f" + 背景 {len(bg_pos)} 枚" if len(bg_pos) else ""
             print(f"  全 {n_all} 枚 → 警戒区域あり {len(keep)} 枚 → "
                   f"テスト {len(hz_pos)} 枚{extra}（bg_ratio={bg_ratio}）", flush=True)
+    elif subset == "gtonly":
+        # 警戒区域を含むタイルだけ。**広島と島根で土俵を揃えるため**にある。
+        # 広島は subset: holdout（正解ありタイルの2割）で評価しており、
+        # 予測は必ず正解のあるタイルに出る。島根は subset: all なので
+        # 背景タイル14,890枚も含み、そこに出た予測は定義上すべて偽陽性になる。
+        # 同じ土俵で測ると箇所Precision の差は 19.2帯 から 0.5帯 に縮む。
+        sel = [i for i in range(n_all) if np.max(np.asarray(ds.Mask[i])) >= 1]
+        flags["has_gt"] = np.ones(len(sel), dtype=bool)
+        if verbose:
+            print(f"  全 {n_all} 枚 → 警戒区域あり {len(sel)} 枚"
+                  f"（背景タイルを外した。広島と土俵を揃える）", flush=True)
+    elif subset == "blocktest":
+        # 空間ブロック分割のテスト側。**分割は乱数では再現できない**ので
+        # splits/*.csv の表を引く（dc5lib/splits.py）。
+        # 距離の層も一緒に持たせる。推論結果CSVに列として出るので、
+        # あとから距離別に集計できる。
+        from dc5lib import splits as _splits
+        want = _splits.test_tiles()
+        bins = _splits.dist_bin()
+        sel = [i for i in range(n_all) if int(ds.No[i]) in want]
+        flags["has_gt"] = np.ones(len(sel), dtype=bool)
+        flags["dist_bin"] = np.array([bins.get(int(ds.No[i]), "") for i in sel])
+        if verbose:
+            from collections import Counter
+            c = Counter(flags["dist_bin"])
+            print(f"  全 {n_all} 枚 → ブロック分割のテスト {len(sel)} 枚 "
+                  f"（{dict(c)}）", flush=True)
     elif subset == "background":
         # 警戒区域を1画素も含まないタイル。学習には一切使われていない。
         sel = [i for i in range(n_all) if np.max(np.asarray(ds.Mask[i])) < 1]
