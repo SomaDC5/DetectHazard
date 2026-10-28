@@ -126,12 +126,21 @@ def _to_hwc(arr):
 
     dataset2 は (1,H,W) のテンソル、dataset3 は (H,W) や (H,W,3) の配列と
     形が混ざることがあるので、貼り合わせる前に必ずここを通す。
+
+    **面の数を決め打ちにしない。** 以前は `shape[0] in (1, 3)` で
+    CHW を判定していたので、**2面の入力（実建物の 建物・無壁舎）が
+    `(2,128,128)` のまま「128面の HWC」と読まれて落ちた**（`44`）。
+    タイルは正方形なので、**後ろ2つが等しくて先頭が違えば CHW** である。
     """
     a = np.asarray(arr)
     if a.ndim == 2:
         return a[:, :, None], "hw"
-    if a.ndim == 3 and a.shape[0] in (1, 3) and a.shape[0] != a.shape[-1]:
-        return np.transpose(a, (1, 2, 0)), "chw"     # CHW -> HWC
+    if a.ndim == 3:
+        if a.shape[1] == a.shape[2] and a.shape[0] != a.shape[1]:
+            return np.transpose(a, (1, 2, 0)), "chw"     # CHW -> HWC
+        # 念のため旧規則も残す（正方形でない面が来た場合）
+        if a.shape[0] in (1, 3) and a.shape[0] != a.shape[-1]:
+            return np.transpose(a, (1, 2, 0)), "chw"
     return a, "hwc"
 
 
