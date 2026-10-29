@@ -15,6 +15,12 @@ inputs:
 augment: false
 bg_ratio: 0.0
 status: active
+# 学習した手順の世代。詳しくは docs/設計図_修正案.md の 6
+protocol: v1-notebook
+# 和集合（アンサンブル）に入れてよいか
+ensemble: true
+# torch.manual_seed を呼んで学習したか
+seeded: false
 label: ''
 note: 箇所正規化損失の p を 0.5 から 1.0 に上げた版。まず200エポックで傾向を見る（p=0.5では検証F1のピークがepoch28だった）。効果が見えたら他条件と同じ1000で学習し直す。p=0.5 では面積F・箇所Fとも元条件とほぼ同じだったため。過小評価8.45倍を打ち消す設定
 dataset:

@@ -18,6 +18,12 @@ inputs:
 augment: false
 bg_ratio: 0.0
 status: excluded
+# 学習した手順の世代。詳しくは docs/設計図_修正案.md の 6
+protocol: v1-8:2-testselect
+# 和集合（アンサンブル）に入れてよいか
+ensemble: false
+# torch.manual_seed を呼んで学習したか
+seeded: false
 label: Final SAM+APM（重複・対象外）
 note: FinalFusion_SAM_APM と同内容のため解析対象外
 dataset:
@@ -28,8 +34,8 @@ train:
   batch_size: 32
   lr: 0.0001
   seed: 42
-  split: 6:2:2 (train_test_split test_size=0.2 -> 0.25, random_state=42)
-  model_selection: 検証データのF値が最良のエポック
+  split: 8:2 (train_test_split test_size=0.2, random_state=42) 検証分割なし
+  model_selection: テストデータのF値が最良のエポック（旧プロトコル。2026-10-29 に実装を読んで直した。ノートブックは if test_f1 > best_f1_score で選んでおり、検証分割を持っていない）
   loss:
     type: focal_tversky
     alpha: 0.7

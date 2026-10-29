@@ -23,6 +23,12 @@ inputs:
 augment: false
 bg_ratio: 0.0
 status: excluded
+# 学習した手順の世代。詳しくは docs/設計図_修正案.md の 6
+protocol: v1-notebook
+# 和集合（アンサンブル）に入れてよいか
+ensemble: true
+# torch.manual_seed を呼んで学習したか
+seeded: false
 label: ''
 note: 指示書で解析対象外。地質図を加えた3入力。モデル定義は dc5lib/models.py に未登録
 dataset:

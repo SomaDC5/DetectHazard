@@ -15,6 +15,12 @@ inputs:
 augment: false
 bg_ratio: 0.0
 status: active
+# 学習した手順の世代。詳しくは docs/設計図_修正案.md の 6
+protocol: v2-config
+# 和集合（アンサンブル）に入れてよいか
+ensemble: true
+# torch.manual_seed を呼んで学習したか
+seeded: false
 label: Final DEM+APM オーバーラップ学習
 note: オーバーラップ学習の DEM+APM 版。アンサンブルに混ぜるため、入力を変えた対を作る。相関が最も低いのは入力の違い（DEM系 対 SAM系 で 0.596〜0.615）なので、同じ切り方で入力だけ変えた2本は混ぜたときに効くはず。SAM+APM
   版は箇所R 0.6192→0.7036。docs/展望_再現率をどう上げるか.md 8.6

@@ -15,6 +15,12 @@ inputs:
 augment: false
 bg_ratio: 0.0
 status: done
+# 学習した手順の世代。詳しくは docs/設計図_修正案.md の 6
+protocol: v2-config
+# 和集合（アンサンブル）に入れてよいか
+ensemble: true
+# torch.manual_seed を呼んで学習したか
+seeded: true
 label: Final SAM+APM OL学習 + ロジットヒンジ
 note: ロジット空間のヒンジを足した条件。オーバーラップ学習のままゼロから学習する。確率空間の損失は飽和した画素に勾配を送れず、正解画素の20.3パーセントがロジット-10以下で凍結している（展望18.1）。ヒンジの勾配は大きさに依存せず定数なので、そこに唯一届く。lam
   は重みの勾配ノルムをFocalTverskyと同等に合わせた実測値（展望18.2）。展望_再現率をどう上げるか.md 18

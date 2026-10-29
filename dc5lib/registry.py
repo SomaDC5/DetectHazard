@@ -88,6 +88,24 @@ class Condition:
     use_airphoto: bool = False      # 同上
     bg_ratio: float = 0.0
     status: str = "active"          # active / excluded
+    # どの世代の手順で学習したか。**どう学習したかは重みから復元できない**
+    # （`best_model.pth` に epoch と best_f1 しか入っていない）ので、
+    # ここに書いておくしかない。`docs/設計図_修正案.md` の `6`。
+    #   v1-notebook   旧世代。CFG を通らず値が直書き。分割は他と一致（実測）
+    #   v1-blocksplit 空間ブロック分割。**別の土俵**
+    #   v2-config     CFG 経由。seed は条件によって未固定
+    #   v3-base       基盤ノートブック。全項目が config 経由
+    protocol: str = "v1-notebook"
+    # 和集合（アンサンブル）に入れてよいか。**分割か選択が他と違う条件は false。**
+    # テストのF値で最良エポックを選んだ条件を混ぜると、和集合の意味が変わる。
+    ensemble: bool = True
+    # 乱数を固定して学習したか（`torch.manual_seed`）。`ゆらぎ幅.md` の `8`
+    seeded: bool = False
+    # 分割の指定。**空なら train の test_size / val_size / random_state を使う**
+    # （旧条件はこれ）。`kind` で種類を選べるようにしてある。
+    #   {"kind": "random", "test_size": 0.2, "val_size": 0.25, "random_state": 42}
+    #   {"kind": "csv", "file": "hiroshima_block_20km"}   → dc5lib/splits.py
+    split: dict = field(default_factory=dict)
     note: str = ""
     label: str = ""
     dir: Path = field(default=None, repr=False)

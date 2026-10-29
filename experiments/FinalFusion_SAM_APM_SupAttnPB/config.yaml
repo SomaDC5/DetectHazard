@@ -15,6 +15,12 @@ inputs:
 augment: false
 bg_ratio: 0.0
 status: active
+# 学習した手順の世代。詳しくは docs/設計図_修正案.md の 6
+protocol: v1-notebook
+# 和集合（アンサンブル）に入れてよいか
+ensemble: true
+# torch.manual_seed を呼んで学習したか
+seeded: false
 label: ''
 note: 監督つきAttention(ブランチ別)を bg_ratio=0 で。bg10系では SupAttnPB が最良(箇所F 0.6411)だが、bg_ratio
   で落ちたぶんを監督で押し戻しているだけで監督そのものの効果が分離できていない。出発点 FinalFusion_SAM_APM(0.6506) と直接比べるための条件

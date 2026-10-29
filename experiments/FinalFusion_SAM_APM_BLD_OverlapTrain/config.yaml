@@ -19,6 +19,12 @@ inputs:
 augment: false
 bg_ratio: 0.0
 status: active
+# 学習した手順の世代。詳しくは docs/設計図_修正案.md の 6
+protocol: v2-config
+# 和集合（アンサンブル）に入れてよいか
+ensemble: true
+# torch.manual_seed を呼んで学習したか
+seeded: false
 label: Final SAM+APM+建物(実のみ) オーバーラップ学習
 note: K3 の対照。実建物2面(建物・無壁舎)だけを3入力目にしたオーバーラップ学習。仮想建物は入れない。43 で BVB が床を 8.0%->6.2% /
   18.4%->13.7% に下げたが、効いたのが建物の情報なのか仮想建物なのか切り分けられていない。BVB との差が仮想建物の取り分である。他の設定は BVB

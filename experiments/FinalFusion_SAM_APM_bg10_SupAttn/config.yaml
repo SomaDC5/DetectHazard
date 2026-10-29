@@ -15,6 +15,12 @@ inputs:
 augment: false
 bg_ratio: 0.1
 status: active
+# 学習した手順の世代。詳しくは docs/設計図_修正案.md の 6
+protocol: v1-notebook
+# 和集合（アンサンブル）に入れてよいか
+ensemble: true
+# torch.manual_seed を呼んで学習したか
+seeded: false
 label: ''
 note: 監督つきAttention。64x64のスキップで存在マップを監督し、同じものでスキップ特徴を x*(1+sigmoid) 変調する。MPRNet の
   Supervised Attention Module と同じ形。展望.md 5節の発展

@@ -15,6 +15,12 @@ inputs:
 augment: false
 bg_ratio: 0.1
 status: active
+# 学習した手順の世代。詳しくは docs/設計図_修正案.md の 6
+protocol: v1-notebook
+# 和集合（アンサンブル）に入れてよいか
+ensemble: true
+# torch.manual_seed を呼んで学習したか
+seeded: false
 label: ''
 note: 64x64のスキップに ASPP(dilation 1/2/4/8 + 大域プーリング)で文脈を足し、そこを深層監督する。従来の補助ヘッドは受容野26.9mしかなく、箇所の典型サイズ81m四方に足りなかった。次の手_文脈と不均衡.md
   の案A+案C

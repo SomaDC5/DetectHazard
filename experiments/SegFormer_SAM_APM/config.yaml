@@ -17,6 +17,12 @@ inputs:
 augment: false
 bg_ratio: 0.0
 status: done
+# 学習した手順の世代。詳しくは docs/設計図_修正案.md の 6
+protocol: v2-config
+# 和集合（アンサンブル）に入れてよいか
+ensemble: true
+# torch.manual_seed を呼んで学習したか
+seeded: true
 label: SegFormer SAM+APM
 note: SegFormer（Mix Transformer + 全MLPデコーダ）をゼロから学習する。目的はアーキテクチャの族を変えても精度の帯に入ることを示すこと（修士論文の構成.md
   3.3）。transformers の事前学習モデルを使わないのは、族の違いと事前学習の有無が混ざるため。符号化器は入力ごとに2本に分ける（3.2 で Early

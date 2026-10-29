@@ -15,6 +15,12 @@ inputs:
 augment: false
 bg_ratio: 0.0
 status: active
+# 学習した手順の世代。詳しくは docs/設計図_修正案.md の 6
+protocol: v2-config
+# 和集合（アンサンブル）に入れてよいか
+ensemble: true
+# torch.manual_seed を呼んで学習したか
+seeded: true
 label: Final SAM+APM シード2
 note: 複数シードのゆらぎ幅を測るための条件。出発点 FinalFusion_SAM_APM と同じ構成でシードだけ変える。展望.md 1節のゆらぎ幅（検証F1の上位10エポックで0.003-0.005）は同一学習内のばらつきで、学習をやり直したときのばらつきは未測定だった。修士論文の構成.md
   4.7
