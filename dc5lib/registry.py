@@ -106,6 +106,11 @@ class Condition:
     #   {"kind": "random", "test_size": 0.2, "val_size": 0.25, "random_state": 42}
     #   {"kind": "csv", "file": "hiroshima_block_20km"}   → dc5lib/splits.py
     split: dict = field(default_factory=dict)
+    # オーバーラップ学習。**空なら素のタイルで学習する**。
+    #   {"max_shift": 64, "seed": 42}
+    # 既存の OverlapTrain 条件はノートブックに直書きしていた値で、
+    # 2026-10-29 に実装を読んで config に写した（挙動は変わらない）。
+    overlap: dict = field(default_factory=dict)
     note: str = ""
     label: str = ""
     dir: Path = field(default=None, repr=False)

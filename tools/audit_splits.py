@@ -46,6 +46,7 @@ import numpy as np                                      # noqa: E402
 from sklearn.model_selection import train_test_split    # noqa: E402
 
 from dc5lib import paths                                # noqa: E402
+from dc5lib import splits as _splits
 from dc5lib.data import load_dataset                    # noqa: E402
 from dc5lib.registry import get                         # noqa: E402
 from dc5lib.traincfg import train_cfg                   # noqa: E402
@@ -60,36 +61,43 @@ DEFAULT = ["FinalFusion_SAM_APM_OverlapTrain",
 
 
 def read_no(path: Path):
-    """pkl を1つ読んで `No` だけ返す。**すぐ捨てる。**"""
+    """pkl を1つ読んで**学習に使うタイルの `No`** を返す。すぐ捨てる。
+
+    > **2026-10-29 の直し。** 最初の版は pkl の全タイルで分割していたが、
+    > **ノートブックは `max(Mask) >= 1` のタイルだけを `dataset2` に集めてから
+    > 分割している**（警戒区域を含まないタイルは `dataset3` に回る）。
+    > 全タイルで計算すると、条件どうしの一致／不一致の判定は変わらないが
+    > **枚数が実際の分割と違う**。22,888/7,630/7,630 と報告したのは誤りだった。
+    """
     gb = path.stat().st_size / 1024 ** 3
     print(f"  読み込み {path.name} ({gb:.1f} GB) … ", end="", flush=True)
     t = time.time()
     ds = load_dataset(path)
-    no = [tuple(np.asarray(x).ravel().tolist()) if np.ndim(x) else x
-          for x in ds.No]
-    n_mask = len(ds.Mask) if hasattr(ds, "Mask") else -1
+    n_all = len(ds.No)
+    keep = [i for i in range(n_all)
+            if np.max(np.asarray(ds.Mask[i])) >= 1]
+    no = [int(ds.No[i]) for i in keep]
     del ds
     gc.collect()
-    print(f"{time.time() - t:.0f}秒 / {len(no):,} タイル", flush=True)
-    return no, n_mask
+    print(f"{time.time() - t:.0f}秒 / 全 {n_all:,} 枚 → "
+          f"警戒区域あり {len(no):,} 枚", flush=True)
+    return no, n_all
 
 
-def split_of(no, cfg):
-    """ノートブックと同じ手順で分割し、**タイル番号の集合**で返す。"""
-    idx_all = np.arange(len(no))
-    idx_tv, idx_te = train_test_split(idx_all, test_size=cfg.test_size,
-                                      random_state=cfg.random_state)
-    idx_tr, idx_va = train_test_split(idx_tv, test_size=cfg.val_size,
-                                      random_state=cfg.random_state)
-    pick = lambda ii: frozenset(no[int(i)] for i in ii)   # noqa: E731
-    return {"学習": pick(idx_tr), "検証": pick(idx_va), "テスト": pick(idx_te)}
+def split_of(no, cond, cfg):
+    """`dc5lib.splits.resolve` で分割し、**タイル番号の集合**で返す。
+
+    **指紋と分割の計算は `dc5lib/splits.py` に1か所だけ置いてある。**
+    ここで別に実装すると、いずれ食い違って
+    「同じ分割か」の判定が信用できなくなる。
+    """
+    sp = _splits.resolve(cond, no, cfg)
+    return ({k: frozenset(sp["tiles"][e]) for k, e in
+             (("学習", "train"), ("検証", "val"), ("テスト", "test"))}, sp)
 
 
 def digest(no):
-    h = hashlib.sha256()
-    for x in no:
-        h.update(repr(x).encode())
-    return h.hexdigest()[:12]
+    return _splits.tiles_fingerprint(no)
 
 
 def main():
@@ -112,7 +120,7 @@ def main():
             p = cond.pkl_for(REGION_DIR[region])
             by_pkl.setdefault(p, []).append(n)
 
-        nos, splits, cfgs = {}, {}, {}
+        nos, splits, cfgs, specs = {}, {}, {}, {}
         for p, names in by_pkl.items():
             if not p.exists():
                 print(f"  {p.name} がありません（{', '.join(names)}）")
@@ -121,8 +129,8 @@ def main():
             for n in names:
                 nos[n] = no
                 cfgs[n] = train_cfg(n)
-                splits[n] = split_of(no, cfgs[n])
-            print(f"      Mask {n_mask:,} 枚 / No の指紋 {digest(no)}")
+                splits[n], specs[n] = split_of(no, get(n), cfgs[n])
+            print(f"      全 {n_mask:,} 枚 / 使うタイルの指紋 {digest(no)}")
 
         print(f"\n{'条件':<40}{'pkl':<30}{'タイル':>8}"
               f"{'指紋':>14}{'学習':>8}{'検証':>8}{'テスト':>8}")

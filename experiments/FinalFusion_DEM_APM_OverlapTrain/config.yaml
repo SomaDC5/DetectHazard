@@ -21,6 +21,11 @@ protocol: v2-config
 ensemble: true
 # torch.manual_seed を呼んで学習したか
 seeded: false
+# オーバーラップ学習。ノートブックに直書きしていた値を、2026-10-29 に
+# 実装を読んで写した（max_shift=64 / seed=42。挙動は変わらない）
+overlap:
+  max_shift: 64
+  seed: 42
 label: Final DEM+APM オーバーラップ学習
 note: オーバーラップ学習の DEM+APM 版。アンサンブルに混ぜるため、入力を変えた対を作る。相関が最も低いのは入力の違い（DEM系 対 SAM系 で 0.596〜0.615）なので、同じ切り方で入力だけ変えた2本は混ぜたときに効くはず。SAM+APM
   版は箇所R 0.6192→0.7036。docs/展望_再現率をどう上げるか.md 8.6
