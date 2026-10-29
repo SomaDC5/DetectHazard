@@ -220,7 +220,7 @@ try:
                 f"{_r['name']}: 直書きの値が config と違います"
                 f"（{_k} {_where} {_what}）")
         _pr = getattr(_r.get("cond"), "protocol", "")
-        if _pr == "v3-base":
+        if _pr.startswith("v3"):
             if any("CFG = train_cfg" in p for p in _r.get("problems", [])):
                 problems.append(
                     f"{_r['name']}: protocol が v3-base なのに "

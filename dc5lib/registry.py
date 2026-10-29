@@ -332,12 +332,22 @@ def _check_notebook_matches_config(name, c):
                     f"config を変えてもノートブックが追従していません")
 
         # (3) config に early_stop_patience があるのに、ノートブックに
-        #     対応するコードが無いと、黙って epochs の上限まで走り続ける
+        #     対応するコードが無いと、黙って epochs の上限まで走り続ける。
+        #
+        #     **ただし `dc5lib.train.fit` に任せているなら、ノートブックに
+        #     書かないのが正しい**（基盤ノートブック＝v3）。`fit` が
+        #     `cfg.early_stop_patience` を見て打ち切る。
+        #     2026-10-29 にこの除外を足した。足さないと新しい雛形が
+        #     必ず赤くなり、検査が信用されなくなる。
         if (c.train or {}).get("early_stop_patience"):
-            if "EARLY_STOP_PATIENCE" not in src or "epochs_since_best" not in src:
+            delegated = ("from dc5lib.train import fit" in src
+                         or "dc5lib.train" in src or "fit(" in src)
+            own = ("EARLY_STOP_PATIENCE" in src and "epochs_since_best" in src)
+            if not own and not delegated:
                 problems.append(
                     f"{where}: config に early_stop_patience があるのに、"
-                    f"ノートブックに早期終了のコードがありません。"
+                    f"ノートブックに早期終了のコードが無く、"
+                    f"dc5lib.train.fit も使っていません。"
                     f"epochs の上限まで走り続けます")
     return problems
 

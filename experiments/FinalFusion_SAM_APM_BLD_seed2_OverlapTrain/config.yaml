@@ -1,0 +1,59 @@
+# 実験条件の定義。フォルダを増やせば条件が増える。
+# 重みは dc5-data/weights/<name>/ にあり、ここには置かない。
+name: FinalFusion_SAM_APM_BLD_seed2_OverlapTrain
+arch: TripleEncoderUNet
+family: Final
+inputs:
+- key: terrain
+  source: SAM
+  channels: 1
+  field: DEM
+- key: airphoto
+  source: APM
+  channels: 3
+  field: AirPhoto
+- key: building
+  source: BLD
+  channels: 2
+  field: Building
+augment: false
+bg_ratio: 0.0
+status: active
+# 学習した手順の世代。docs/設計図_修正案.md の 6
+# **まだ学習していないので v3-base ではない。回したら書き換える**
+protocol: v3-base-pending
+# 和集合に入れてよいか
+ensemble: true
+# torch.manual_seed を呼んで学習したか（基盤ノートブックは呼ぶ）
+seeded: true
+# 分割。1本目と同じ値にする（分割は変えない）
+split:
+  kind: random
+  test_size: 0.2
+  val_size: 0.25
+  random_state: 42
+# オーバーラップ学習。1本目と同じ
+overlap:
+  max_shift: 64
+  seed: 42
+label: Final SAM+APM+建物(実のみ) オーバーラップ学習 2本目(seed 2)
+note: 44.7 のやり直しの対照。FinalFusion_SAM_APM_BLD_OverlapTrain と設定は同じで、乱数の種だけ 2 にした2本目。1本目は
+  torch.manual_seed を呼んでいないので初期値もシャッフル順も固定されていなかった（窓のずらし幅を引く rng は seed=42 で固定だが、1本の列を
+  getitem の呼ばれた順に消費するので、shuffle が変わればどのタイルにどのずらし幅が当たるかも変わる）。目的は BLD と BVB の床の重なり Jaccard
+  0.482/0.570 が仮想建物のおかげか、ただ学習が別だからかの切り分け。基盤ノートブック（v3-base）からの作成テストでもある。docs/展望_再現率をどう上げるか.md
+  44.7 / docs/ノートブックの作り方.md
+dataset:
+  Hiroshima: hiroshima_sam_apm_bld.pkl
+  Shimane: shimane_sam_apm_bld.pkl
+train:
+  epochs: 1000
+  batch_size: 32
+  lr: 0.0001
+  seed: 2
+  early_stop_patience: 100
+  loss:
+    type: focal_tversky
+    alpha: 0.7
+    beta: 0.3
+    gamma: 0.75
+  augment_params: null

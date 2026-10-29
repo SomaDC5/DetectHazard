@@ -95,6 +95,22 @@ CHECKS = [
 ]
 MARK = {(True, False): "経由", (True, True): "両方", (False, True): "直書",
         (False, False): "無い"}
+# **どの項目を dc5lib の誰が持っているか。**
+# 基盤ノートブック（v3）は値をノートブックに書かないので、`経由` でも `直書` でも
+# なく「無い」になる。だが**それが正しい状態**である。呼んでいる入口が
+# その項目を持っているなら `委譲` と出す。
+OWNER = {
+    "arch": ("build_model_for",),
+    "dataset": ("build_loaders",),
+    "weights": ("fit", "ckpt."),
+    "curve": ("fit", "curve_path"),
+    "loss": ("fit", "build_loss"),
+    "epochs": ("fit",), "lr": ("fit",), "patience": ("fit",),
+    "batch_size": ("build_loaders", "fit"),
+    "seed": ("seed_everything",),
+    "test_size": ("build_loaders",), "val_size": ("build_loaders",),
+    "random_state": ("build_loaders",), "bg_ratio": ("build_loaders",),
+}
 # 作る側が書き込む面の名前。**読む側（config の field）と突き合わせる。**
 PRODUCED = {
     "DEM": "dataset_build（傾斜量図 or 標高）",
@@ -159,10 +175,12 @@ def audit_one(name: str, d: Path):
     if not nbs:
         r["problems"].append("ノートブックがありません")
         return r
-    if len(nbs) > 1:
+    names = {x.name for x in nbs}
+    if len(nbs) > 1 and names != {"train.ipynb", "eval_shimane.ipynb"}:
         r["problems"].append(f"ノートブックが {len(nbs)} 個: "
                              + " / ".join(p.name for p in nbs))
-    nb = nbs[0]
+    # **train.ipynb があればそれを見る。** 名前順だと eval_shimane が先に来る
+    nb = next((x for x in nbs if x.name == "train.ipynb"), nbs[0])
     r["nb"] = nb.name
     lines = strip_comments(code_of(nb)).split("\n")
 
@@ -177,9 +195,18 @@ def audit_one(name: str, d: Path):
     if not re.search(r"CFG\s*=\s*train_cfg\s*\(", "\n".join(lines)):
         r["problems"].append("CFG = train_cfg(...) が無い（train: の項目はどれも届かない）")
 
+    whole = "\n".join(lines)
+    r["uses"] = sorted(u for u in
+                       ("build_loaders", "fit", "seed_everything",
+                        "build_model_for", "build_loss", "evaluate",
+                        "curve_path", "ckpt.")
+                       if u in whole)
     for key, wp, hp in CHECKS:
         w, h = hits(wp, lines), hits(hp, lines)
-        r["marks"][key] = MARK[(bool(w), bool(h))]
+        m = MARK[(bool(w), bool(h))]
+        if m == "無い" and any(o in r["uses"] for o in OWNER.get(key, ())):
+            m = "委譲"
+        r["marks"][key] = m
         r["ev"][key] = {"経由": w, "直書": h}
 
     # 字下げされた model = Xxx(...) は見本の可能性。本体と分けて控えておく
@@ -191,9 +218,11 @@ def audit_one(name: str, d: Path):
     for key, where, what in r["diff"]:
         r["problems"].append(f"直書きの値が config と違う: {key} {where} {what}")
 
-    if not re.search(r"epochs_since_best|early_stop|打ち切",
-                     "\n".join(lines)):
-        r["problems"].append("学習ループに早期終了が見当たらない")
+    # 早期終了。**`dc5lib.train.fit` に任せているならノートブックに無くてよい。**
+    if not re.search(r"epochs_since_best|early_stop|打ち切", whole) \
+            and "fit" not in r["uses"]:
+        r["problems"].append(
+            "学習ループに早期終了が無く、dc5lib.train.fit も使っていない")
 
     for reg, fn in (cond.dataset or {}).items():
         try:
@@ -326,8 +355,9 @@ def main():
 
     print("=" * 118)
     print(f"配線の監査 — {len(rows)} 条件")
-    print("  経由=config を通る / 両方=経由も直書きも在る（危険）"
-          " / 直書=値が直接書かれている / 無い=見つからない")
+    print("  経由=config を通る / 委譲=dc5lib に任せている（v3 の正解）"
+          " / 両方=経由も直書きも在る（危険） / 直書=値が直接書かれている"
+          " / 無い=どこにも無い")
     print("=" * 118)
     print(f"{'条件':<42}" + "".join(f"{k[:9]:>10}" for k in keys))
     for r in rows:
@@ -339,14 +369,15 @@ def main():
     print("\n" + "=" * 118)
     print("項目ごとの集計")
     print("=" * 118)
-    print(f"{'項目':<16}{'経由':>8}{'両方':>8}{'直書':>8}{'無い':>8}"
+    print(f"{'項目':<16}{'経由':>8}{'委譲':>8}{'両方':>8}{'直書':>8}{'無い':>8}"
           "   config を変えて効くのは")
     for k in keys:
-        c = {m: 0 for m in ("経由", "両方", "直書", "無い")}
+        c = {m: 0 for m in ("経由", "委譲", "両方", "直書", "無い")}
         for r in rows:
             c[r["marks"].get(k, "無い")] += 1
-        print(f"{k:<16}{c['経由']:>8}{c['両方']:>8}{c['直書']:>8}"
-              f"{c['無い']:>8}   {c['経由']}/{len(rows)} 本")
+        ok = c["経由"] + c["委譲"]
+        print(f"{k:<16}{c['経由']:>8}{c['委譲']:>8}{c['両方']:>8}{c['直書']:>8}"
+              f"{c['無い']:>8}   {ok}/{len(rows)} 本")
 
     print("\n" + "=" * 118)
     print("見つかった食い違い")
