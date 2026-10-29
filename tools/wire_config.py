@@ -141,6 +141,20 @@ if os.path.exists(save_path):'''
 
 
 
+# モデルを作る行。**閉じ括弧を含めない。**
+#
+# > もとは `"model = build_model(get(CONDITION).arch)"` という
+# > **閉じ括弧まで含む1行の文字列**を錨にしていた。そのため
+# >
+# >     model = build_model(get(CONDITION).arch,      # 引数が続いて改行する
+# >     model = build_model_for(get(CONDITION))        # 3入力の条件
+# >
+# > のどちらにも当たらず、**乱数の固定が黙って飛ばされていた**
+# > （未学習の4条件と、BLD / BVB / LU のノートブックが該当）。
+# > 戻り値が「直した内容なし」になるだけなので、気づけなかった。
+MODEL_LINE = re.compile(r"^model\s*=\s*build_model(?:_for)?\(", re.M)
+
+
 def _add_seed(src):
     """乱数を固定する。戻り値は (新しい中身, 直した内容)。
 
@@ -160,8 +174,8 @@ def _add_seed(src):
     """
     if "torch.manual_seed" in src:
         return src, []
-    anchor = "model = build_model(get(CONDITION).arch)"
-    if anchor not in src:
+    m = MODEL_LINE.search(src)
+    if m is None:
         return src, []
     block = """# ============================================================
 # 乱数の固定。**これが無いと CFG.seed は何も変えない。**
@@ -178,7 +192,8 @@ _random.seed(CFG.seed)
 print("乱数を固定:", CFG.seed)
 
 """
-    return src.replace(anchor, block + anchor, 1), ["乱数の固定を追加"]
+    return (src[:m.start()] + block + src[m.start():],
+            ["乱数の固定を追加"])
 
 
 # `model = build_model(get(CONDITION).arch)` を入れるときに要る import。
@@ -453,8 +468,10 @@ def wire(cond_dir, check_only=False):
                 else:
                     new = fixed
                     changes += [f"c{ci} {d}" for d in done]
-        # 乱数の固定（モデルの初期値と shuffle）
-        if "build_model(get(CONDITION).arch)" in new:
+        # 乱数の固定（モデルの初期値と shuffle）。
+        # **ここも錨と同じ規則で引く。** 文字列の決め打ちだと
+        # 改行して続く書き方と build_model_for を取りこぼす
+        if MODEL_LINE.search(new):
             fixed, done = _add_seed(new)
             if done:
                 if check_only:
