@@ -196,6 +196,33 @@ except Exception:
     pass
 
 # ----------------------------------------------------------------------
+# ノートブックが nbformat として妥当か
+#
+# **これが無いと nbconvert で実行できないノートブックに気づけない。**
+# 2026-10-29 に雛形を書いたとき、コードセルに `outputs` を入れ忘れて
+# `Notebook JSON is invalid: 'outputs' is a required property` で
+# 実行が拒否された。手で開くと動くので、通しで走らせるまで気づけない。
+# ----------------------------------------------------------------------
+try:
+    import io as _io
+
+    import nbformat as _nbf
+
+    for _nb in sorted(paths.REPO_ROOT.glob("templates/*.ipynb")) + sorted(
+            paths.experiments_dir().glob("*/*.ipynb")):
+        try:
+            _d = _nbf.read(_io.StringIO(_nb.read_text(encoding="utf-8")),
+                           as_version=4)
+            _nbf.validate(_d)
+        except Exception as _e:                           # noqa: BLE001
+            problems.append(
+                f"{_nb.relative_to(paths.REPO_ROOT)} が nbformat として"
+                f"妥当ではありません（nbconvert で実行できない）: "
+                f"{str(_e).splitlines()[0][:90]}")
+except ImportError:
+    pass
+
+# ----------------------------------------------------------------------
 # config が実装に届いているか（`tools/audit_wiring.py` を呼ぶ）
 #
 # **「直書きの値が config と違う」は0件でなければならない。**

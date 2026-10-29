@@ -1,0 +1,10 @@
+name: union5
+label: 5本（44。実建物だけの対照も足した）
+base: FinalFusion_SAM_APM_OverlapTrain
+members:
+  - FinalFusion_DEM_APM_OverlapTrain
+  - FinalFusion_SAM_APM_LU_OverlapTrain
+  - FinalFusion_SAM_APM_BVB_OverlapTrain
+  - FinalFusion_SAM_APM_BLD_OverlapTrain
+recorded: docs/展望_再現率をどう上げるか.md 44.4
+note: 床が 491件(5.47%) / 3,377件(12.30%)。BVB と BLD の床の重なりは Jaccard 0.482 / 0.570。

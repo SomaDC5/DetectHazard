@@ -1,0 +1,9 @@
+name: union4
+label: 4本（43。建物の実+仮想を足した）
+base: FinalFusion_SAM_APM_OverlapTrain
+members:
+  - FinalFusion_DEM_APM_OverlapTrain
+  - FinalFusion_SAM_APM_LU_OverlapTrain
+  - FinalFusion_SAM_APM_BVB_OverlapTrain
+recorded: docs/展望_再現率をどう上げるか.md 43.10
+note: 床が 557件(6.20%) / 3,748件(13.66%) に下がった。

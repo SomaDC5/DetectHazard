@@ -46,10 +46,10 @@ from analysis.run_overlap_prune import infer as ol_infer        # noqa: E402
 from dc5lib.device import pick_device                           # noqa: E402
 from dc5lib.registry import get                                 # noqa: E402
 
-DEFAULT = ["FinalFusion_SAM_APM_OverlapTrain",
-           "FinalFusion_DEM_APM_OverlapTrain",
-           "FinalFusion_SAM_APM_LU_OverlapTrain",
-           "FinalFusion_SAM_APM_OL_LogitHinge"]
+# **構成員は ensembles/greedy4.yaml に書いてある。** ここには書かない
+from dc5lib import ensemble as _ens                             # noqa: E402
+
+DEFAULT = _ens.get("greedy4").all
 COV_GT = 0.5
 
 

@@ -57,9 +57,16 @@ from analysis.run_stage2_train import auc, augment, cache_path  # noqa: E402
 from dc5lib import stage2                                       # noqa: E402
 from dc5lib.device import pick_device                           # noqa: E402
 
-STAGE1 = "FinalFusion_SAM_APM_OverlapTrain"
-UNION3 = ["FinalFusion_DEM_APM_OverlapTrain",
-          "FinalFusion_SAM_APM_LU_OverlapTrain"]
+# **構成員は ensembles/union3.yaml に書いてある。** ここには書かない。
+# 以前はここと run_miss_overlap.py と audit_splits.py の3か所に
+# 別々に並べていて、どれかを足し忘れると
+# 「測った集合」と「語っている集合」が食い違った。
+# 値は切り替え前と同一であることを確かめてある（dc5lib/ensemble.py）。
+from dc5lib import ensemble as _ens                             # noqa: E402
+
+_U3 = _ens.get("union3")
+STAGE1 = _U3.base
+UNION3 = list(_U3.members)
 
 
 def load(stage1, union, agree):
