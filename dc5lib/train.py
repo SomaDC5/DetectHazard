@@ -220,6 +220,20 @@ def fit(cond, loaders, device=None, hooks=None, epochs=None,
         obj = torch.load(wpath, map_location="cpu", weights_only=False)
         obj["meta"] = m
         torch.save(obj, wpath)
+
+        # **最良エポックの重みを model に戻す。**
+        # 戻さないと model は最終エポックのままで、fit のあとに
+        # model を渡して評価すると**選んでいないモデルを測る**。
+        # 実測で箇所F 0.6610（最終 ep184）対 0.6914（最良 ep84）だった。
+        sd = obj.get("model_state_dict", obj.get("state_dict"))
+        if sd is None:
+            raise AssertionError(
+                f"{wpath} に model_state_dict がありません。最良の重みを "
+                "model に戻せません")
+        model.load_state_dict(sd)
+        if verbose:
+            print(f"最良エポック {hist.best_epoch} の重みを model に戻しました"
+                  "（これ以降 model を渡して評価してよい）")
     if verbose:
         print(hist.describe())
     return hist

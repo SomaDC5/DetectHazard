@@ -117,8 +117,13 @@ def main():
     print(ckpt.describe(wpath))
     print("=" * 78, flush=True)
 
-    if not a.no_eval:
-        evaluate(cond, ld, "test", model=model)
+    if a.dry and not a.no_eval:
+        print("【試運転】評価は飛ばします（本物の重みを読んでしまうため）")
+    elif not a.no_eval:
+        # **model= を渡さない。** ディスクに保存した最良の重みから読ませる。
+        # fit は最良を model に戻すようになったが、二重に守る
+        # （以前ここで最終エポックのモデルを測っていた）。
+        evaluate(cond, ld, "test", record=not a.dry)
     print(f"\n曲線: {hist.curve}")
     print(f"重み: {hist.weights}")
     if not a.dry:

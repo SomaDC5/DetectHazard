@@ -103,7 +103,10 @@ class Loaders:
                        f"（全 {self.n_all:,} から検証とテストを外した。"
                        f"**背景は近傍に使う**）")
         else:
-            out.append("オーバーラップ なし（素のタイルで学習）")
+            # **黙ってはいけない。** config の overlap: を書き忘れると
+            # 素のタイルで学習が走り、名前だけ OverlapTrain になる
+            out.append("**オーバーラップ学習なし（素のタイルで学習）**"
+                       " ── config の overlap.max_shift が 0 か未設定")
         for k, v in self.fields.items():
             out.append(f"入力 {k:<10}{v['shape']} {v['dtype']}"
                        f"  平均 {v['mean']:.5f}"

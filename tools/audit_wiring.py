@@ -92,6 +92,11 @@ CHECKS = [
      r"random_state\s*=\s*\d+"),
     ("bg_ratio", r"CFG\.bg_ratio",
      r"^\s*(?:bg_ratio|BG_RATIO|ratio)\s*=\s*0?\.\d+"),
+    # オーバーラップ学習。config の overlap.max_shift が効いているか。
+    # **0 か overlap: 自体が無ければ素のタイルで学習する**ので、
+    # 書き忘れに気づけないと別の学習をしてしまう
+    ("overlap", r"max_shift\s*=\s*CFG\.",
+     r"max_shift\s*=\s*\d+"),
 ]
 MARK = {(True, False): "経由", (True, True): "両方", (False, True): "直書",
         (False, False): "無い"}
@@ -110,6 +115,7 @@ OWNER = {
     "seed": ("seed_everything",),
     "test_size": ("build_loaders",), "val_size": ("build_loaders",),
     "random_state": ("build_loaders",), "bg_ratio": ("build_loaders",),
+    "overlap": ("build_loaders",),
 }
 # 作る側が書き込む面の名前。**読む側（config の field）と突き合わせる。**
 PRODUCED = {
@@ -265,6 +271,7 @@ VALUES = [
     ("patience", r"patience\s*=\s*([0-9]+)", "early_stop_patience"),
     ("split", r"test_size\s*=\s*(0\.[0-9]+)", ("test_size", "val_size")),
     ("random_state", r"random_state\s*=\s*([0-9]+)", "random_state"),
+    ("overlap", r"max_shift\s*=\s*([0-9]+)", "overlap.max_shift"),
 ]
 
 
@@ -278,12 +285,7 @@ def value_check(cond, lines):
     same, diff = [], []
     for key, pat, attr in VALUES:
         attrs = attr if isinstance(attr, tuple) else (attr,)
-        want = []
-        for an in attrs:
-            v = getattr(cfg, an, None)
-            if v is None:
-                v = getattr(cond, an, None)
-            want.append(v)
+        want = [_resolve(cfg, cond, an) for an in attrs]
         rx = re.compile(pat)
         for ln, txt in [(i + 1, l) for i, l in enumerate(lines)]:
             m = rx.search(txt)
@@ -294,6 +296,16 @@ def value_check(cond, lines):
             rec = (key, f"L{ln}", f"{got} / config {'|'.join(map(str, want))}")
             (same if ok else diff).append(rec)
     return same, diff
+
+
+def _resolve(cfg, cond, an):
+    """`epochs` は cfg から、`overlap.max_shift` は cond の入れ子から。"""
+    if "." in an:
+        head, tail = an.split(".", 1)
+        d = getattr(cond, head, None) or {}
+        return d.get(tail) if isinstance(d, dict) else None
+    v = getattr(cfg, an, None)
+    return getattr(cond, an, None) if v is None else v
 
 
 def _num_eq(a, b) -> bool:

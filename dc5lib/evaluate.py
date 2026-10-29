@@ -15,6 +15,11 @@
     r = evaluate(get(CONDITION), ld)            # テストで測る
     print(r.describe())
 
+`record=True` を渡すと `results/evals/` に記録し、`metrics.csv` に並ぶ。
+**記録しないと docs に書いた数字の出どころが残らない**（`CLAUDE.md` の「出した計算をコードに残す」）。
+`run_id` は重みの素性（`machine` と `started_at`）から作るので、
+**同じ重みを測り直すと同じ記録を置き換える** ── 行が増えない。
+
 **オーバーラップ推論はここではしない。** 学習ノートブックで見るのは
 素のタイルでの値で、オーバーラップ推論の箇所評価は
 `analysis/run_overlap_eval.py` と `analysis/run_overlap_prune.py` が
@@ -107,15 +112,67 @@ def instance_scores(GT, PB) -> dict:
             "n_gt": int(df.n_gt.sum()), "setting": PRIMARY}
 
 
+def _run_id_for(cond, meta):
+    """**重みの素性から run_id を作る。**
+
+    こうすると同じ学習の評価が同じ run_id になり、`record_eval` が
+    古い記録を置き換える。毎回新しい id にすると `metrics.csv` に
+    同じ測定が何行も並ぶ。素性が無い古い重みでは今の時刻になる。
+    """
+    from . import results as R
+    m = meta or {}
+    when = str(m.get("started_at") or m.get("saved_at") or "")
+    # 2026-10-29T16:49:53+09:00 -> 20261029-164953
+    digits = "".join(ch for ch in when[:19] if ch.isdigit())
+    stamp = (digits[:8] + "-" + digits[8:14]) if len(digits) >= 14 \
+        else None
+    return R.new_run_id(cond.name, m.get("machine"), stamp)
+
+
+def _record(cond, loaders, r, split, meta, verbose):
+    """画素と箇所を `results/evals/` に記録する。"""
+    from . import results as R
+    region = str(getattr(loaders, "region", "") or "").lower()
+    if not region:
+        print("  ※ 記録できません: loaders に region がありません")
+        return []
+    run_id = _run_id_for(cond, meta)
+    bg = float(getattr(cond, "bg_ratio", 0.0) or 0.0)
+    tileset = R.tileset_label(region, bg)
+    note = ("dc5lib.evaluate.evaluate。**素のタイル**（オーバーラップ推論ではない）"
+            f" / {split} {r.n_tiles:,} 枚")
+    out = [R.record_eval(
+        run_id=run_id, condition=cond.name, region=region,
+        tileset=tileset, scope="通常", metric_kind="面積",
+        recall=r.pixel["recall"], precision=r.pixel["precision"],
+        f1=r.pixel["f1"], n_tiles=r.n_tiles, note=note)]
+    if r.instance:
+        out.append(R.record_eval(
+            run_id=run_id, condition=cond.name, region=region,
+            tileset=tileset, scope="通常", metric_kind="箇所",
+            setting=r.instance["setting"],
+            recall=r.instance["recall"],
+            precision=r.instance["precision"], f1=r.instance["f1"],
+            n_gt_instances=r.instance["n_gt"],
+            n_pred_instances=r.instance["n_pred"],
+            n_tiles=r.n_tiles, note=note))
+    if verbose:
+        print(f"  記録しました {len(out)} 件 / run_id {run_id}")
+        print(f"    {out[0].parent}")
+    return out
+
+
 def evaluate(cond, loaders, split="test", model=None, device=None,
-             forward=None, thr=0.5, instance=True, verbose=True) -> Result:
+             forward=None, thr=0.5, instance=True, verbose=True,
+             record=False, rebuild_csv=True) -> Result:
+    from .ckpt import meta_of
     loader = getattr(loaders, split)
+    meta = meta_of(cond.weights) if cond.weights.exists() else None
     if model is None:
-        from .ckpt import meta_of
         from .models import build_model_for, load_weights
         model = build_model_for(cond)
         load_weights(model, cond.weights, device="cpu")
-        if verbose and meta_of(cond.weights) is None:
+        if verbose and meta is None:
             print("  ※ この重みには素性がありません（固定前の世代）")
     GT, PB, _ = predict(model, loader, device, forward, thr)
     r = Result(pixel=pixel_scores(GT, PB), n_tiles=len(GT), split=split)
@@ -123,4 +180,11 @@ def evaluate(cond, loaders, split="test", model=None, device=None,
         r.instance = instance_scores(GT, PB)
     if verbose:
         print(r.describe())
+    if record:
+        if _record(cond, loaders, r, split, meta, verbose) \
+                and rebuild_csv:
+            from . import results as R
+            out = R.build_metrics_csv()
+            if verbose:
+                print(f"  metrics.csv を作り直しました: {out}")
     return r

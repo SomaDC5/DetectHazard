@@ -352,6 +352,29 @@ def _check_notebook_matches_config(name, c):
     return problems
 
 
+def _check_overlap_names():
+    """名前が OverlapTrain / OL と名乗るなら config に overlap が要る。
+
+    **config の overlap.max_shift が 0 か未設定なら素のタイルで学習する。**
+    名前だけオーバーラップのつもりになっていると、条件の意味が変わる
+    （dc5lib/overlap.py の __getitem__ は max_shift<=0 で中央固定）。
+    """
+    out = []
+    for c in load_all(include_excluded=True):
+        by_name = ("OverlapTrain" in c.name) or ("_OL_" in c.name) \
+            or c.name.endswith("_OL")
+        ov = int((getattr(c, 'overlap', None) or {}).get('max_shift', 0) or 0)
+        if by_name and ov <= 0:
+            out.append(
+                f"{c.name}: 名前はオーバーラップ学習だが config の overlap.max_shift が "
+                f"{ov} です。このままだと素のタイルで学習します")
+        if ov > 0 and not by_name:
+            out.append(
+                f"{c.name}: config に overlap.max_shift={ov} があるのに名前に "
+                f"OverlapTrain も OL も入っていません")
+    return out
+
+
 def _check_labels():
     """図表に出す表示ラベルが重複していないか。
 
@@ -369,7 +392,8 @@ def _check_labels():
 
 def check():
     """CI / コミット前に回す検査。異常があれば行を返す。"""
-    problems = _check_unicode_paths() + _check_labels()
+    problems = (_check_unicode_paths() + _check_labels()
+                + _check_overlap_names())
     names = [p.name for p in sorted(paths.experiments_dir().iterdir()) if p.is_dir()]
 
     # exFAT と Windows は大文字小文字を区別しないが、Ubuntu の ext4 は区別する。

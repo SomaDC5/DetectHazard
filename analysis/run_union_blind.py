@@ -65,6 +65,21 @@ RECORDED5 = ["SAM_APM", "DEM_APM", "SAM_APM_LU", "SAM_APM_BVB",
              "SAM_APM_BLD"]
 
 
+def guard_save(save, tag, shorts):
+    """無印の CSV を別の構成員で上書きしようとしていたら止める。
+
+    **推論の前に呼ぶ。** あとで呼ぶと1時間回してから止まる。
+    """
+    if not save or tag or shorts == RECORDED5:
+        return
+    sys.exit(
+        "無印の union_blind__<地域>.csv は **44.4/44.6 の数字の出どころ**です。" + chr(10)
+        + f"  記録済みの構成員 {RECORDED5}" + chr(10)
+        + f"  いまの構成員     {shorts}" + chr(10)
+        + "構成員が違うまま無印で保存すると過去の記述が復元できなくなります。"
+          "--tag を付けてください（**推論を始める前に止めました**）")
+
+
 def short(name):
     """`FinalFusion_SAM_APM_LU_OverlapTrain` -> `SAM_APM_LU`。"""
     return name.replace("FinalFusion_", "").replace("_OverlapTrain", "")
@@ -116,6 +131,8 @@ def main():
     print(f"構成員 {len(names)} 本")
     for n in names:
         print(f"  {short(n)}")
+
+    guard_save(a.save, a.tag, [short(n) for n in names])
 
     base = None
     labels = None
@@ -232,14 +249,6 @@ def main():
     if a.save:
         od = paths.cache_dir("analysis") / "coverage"
         od.mkdir(parents=True, exist_ok=True)
-        now = [short(n) for n in names]
-        if not a.tag and now != RECORDED5:
-            sys.exit(
-                "無印の union_blind__<地域>.csv は **44.4/44.6 の数字の出どころ**です。" + chr(10)
-                + f"  記録済みの構成員 {RECORDED5}" + chr(10)
-                + f"  いまの構成員     {now}" + chr(10)
-                + "構成員が違うまま無印で保存すると過去の記述が復元できなくなります。"
-                  "--tag を付けてください")
         p = od / (f"union_blind__{a.region}.csv" if not a.tag
                   else f"union_blind__{a.region}__{a.tag}.csv")
         df.to_csv(p, index=False, encoding="utf-8")

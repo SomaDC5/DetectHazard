@@ -1,0 +1,19 @@
+{
+ "condition": "FinalFusion_SAM_APM_BLD_OverlapTrain",
+ "eval_id": "FinalFusion_SAM_APM_BLD_OverlapTrain__lab-windows__20261030-022048__hiroshima__gtonly__full__inst__cov_gt-0.5--cov_pred-0.3-ca4173",
+ "evaluated_at": "2026-10-30T02:20:48",
+ "f1": 0.6935,
+ "machine": "lab-windows",
+ "metric_kind": "箇所",
+ "n_gt_instances": 8977,
+ "n_pred_instances": 9023,
+ "n_tiles": 2964,
+ "note": "dc5lib.evaluate.evaluate。**素のタイル**（オーバーラップ推論ではない） / test 2,964 枚",
+ "precision": 0.6806,
+ "recall": 0.7069,
+ "region": "hiroshima",
+ "run_id": "FinalFusion_SAM_APM_BLD_OverlapTrain__lab-windows__20261030-022048",
+ "scope": "通常",
+ "setting": "被覆 (cov_gt=0.5, cov_pred=0.3)",
+ "tileset": "警戒のみ"
+}
