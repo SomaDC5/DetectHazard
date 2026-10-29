@@ -442,6 +442,25 @@ def main():
                 msg += f" / 損失を config 駆動に差し替え（{n}箇所）"
             print(f"  複製: experiments/{a.name}/{nb.name}（{msg}）")
             _warn_old_notebook(dst, a.base)
+    else:
+        # **--from を付けなければ templates/ から作る。**
+        # 旧世代のノートブックをコピーして増やすのをやめるため、
+        # これが既定の道である（docs/ノートブックの作り方.md）。
+        tpl = paths.REPO_ROOT / "templates"
+        nbs = sorted(tpl.glob("*.ipynb"))
+        if not nbs:
+            print(f"  ! 雛形が見つかりません: {tpl}")
+        for nb in nbs:
+            dst = d / nb.name
+            t = nb.read_text(encoding="utf-8")
+            if "__CONDITION__" not in t:
+                print(f"  ! {nb.name} に __CONDITION__ がありません（差し替えなし）")
+            t = t.replace("__CONDITION__", a.name)
+            dst.write_text(t, encoding="utf-8")
+            print(f"  作成: experiments/{a.name}/{nb.name}（雛形から。"
+                  "CONDITION を差し替え）")
+        if nbs:
+            print("     **docs/ノートブックの作り方.md を読んでから回すこと。**")
 
     # 何が出来たかをその場で見せる。指定し忘れ（行継続の切れなど）に気づけるように。
     try:

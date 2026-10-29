@@ -195,6 +195,57 @@ try:
 except Exception:
     pass
 
+# ----------------------------------------------------------------------
+# config が実装に届いているか（`tools/audit_wiring.py` を呼ぶ）
+#
+# **「直書きの値が config と違う」は0件でなければならない。**
+# config を読んで条件を理解した人が、実際に回った値を間違えるからである。
+# 2026-10-29 にこれを0件にした（1件あったのは削除した条件のもの）。
+# 新世代（protocol: v3-base）には、さらに
+#   ・CFG = train_cfg(...) がある
+#   ・値の直書きが無い（どの項目も「経由」）
+# を要求する。**旧世代には掛けない。** 掛けると検査が常に赤くなり、
+# 誰も見なくなる（`docs/設計図_修正案.md` の `5`）。
+# ----------------------------------------------------------------------
+try:
+    sys.path.insert(0, str(paths.REPO_ROOT / "tools"))
+    import audit_wiring as _aw
+
+    _rows = [_aw.audit_one(d.name, d)
+             for d in sorted(x for x in paths.experiments_dir().iterdir()
+                             if (x / "config.yaml").exists())]
+    for _r in _rows:
+        for _k, _where, _what in _r.get("diff", []):
+            problems.append(
+                f"{_r['name']}: 直書きの値が config と違います"
+                f"（{_k} {_where} {_what}）")
+        _pr = getattr(_r.get("cond"), "protocol", "")
+        if _pr == "v3-base":
+            if any("CFG = train_cfg" in p for p in _r.get("problems", [])):
+                problems.append(
+                    f"{_r['name']}: protocol が v3-base なのに "
+                    "CFG = train_cfg(...) がありません")
+            _hard = [k for k, m in _r.get("marks", {}).items()
+                     if m in ("直書", "両方")]
+            if _hard:
+                problems.append(
+                    f"{_r['name']}: protocol が v3-base なのに値の直書きが"
+                    f"あります（{', '.join(_hard)}）。"
+                    "docs/ノートブックの作り方.md の 1 を参照")
+    # アンサンブルに ensemble: false の条件が混ざっていないか
+    _no = {_r["name"] for _r in _rows
+           if getattr(_r.get("cond"), "ensemble", True) is False}
+    if _no:
+        from analysis.run_stage2_room import STAGE1, UNION3
+        _used = {STAGE1, *UNION3}
+        _bad = _used & _no
+        if _bad:
+            problems.append(
+                "アンサンブルの既定の構成員に ensemble: false の条件が"
+                f"入っています: {sorted(_bad)}")
+except Exception as _e:                                   # noqa: BLE001
+    problems.append(f"配線の検査ができませんでした: {_e}")
+
 if problems:
     print("検査で問題が見つかりました:")
     for p in problems:
