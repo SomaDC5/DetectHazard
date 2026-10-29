@@ -20,8 +20,9 @@ augment: false
 bg_ratio: 0.0
 status: active
 # 学習した手順の世代。docs/設計図_修正案.md の 6
-# **まだ学習していないので v3-base ではない。回したら書き換える**
-protocol: v3-base-pending
+# 2026-10-29 に tools/run_training.py で学習した（184エポック / 301分 /
+# 最良エポック 84 / 検証F 0.7094）。基盤ノートブックからの作成テストでもある
+protocol: v3-base
 # 和集合に入れてよいか
 ensemble: true
 # torch.manual_seed を呼んで学習したか（基盤ノートブックは呼ぶ）

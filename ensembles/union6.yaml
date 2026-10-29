@@ -1,0 +1,11 @@
+name: union6
+label: 6本（44.7。やり直しの対照 seed2 を足した）
+base: FinalFusion_SAM_APM_OverlapTrain      # 比較の基準になる構成員
+members:
+  - FinalFusion_DEM_APM_OverlapTrain
+  - FinalFusion_SAM_APM_LU_OverlapTrain
+  - FinalFusion_SAM_APM_BVB_OverlapTrain
+  - FinalFusion_SAM_APM_BLD_OverlapTrain
+  - FinalFusion_SAM_APM_BLD_seed2_OverlapTrain
+recorded: docs/展望_再現率をどう上げるか.md 44.7 / 44.8   # 数字が載っているなら動かさない
+note: BLD と seed2 は入力も分割も同じで乱数の種だけ違う。44.7 で「仮想建物は別の場所を光らせていない」と出た。床が 465件(5.18%) / 3,204件(11.67%)。**cov_union は測っていない**（列を継ぎ足したので和集合の箇所R/P/F は出せない。44.9）。
