@@ -12,10 +12,10 @@
     tools/audit_splits.py         DEFAULT
 
 の3か所に別々に書かれていた。**どれかを足し忘れると、測った集合と
-語っている集合が食い違う。** だから宣言を `ensembles/*.yaml` に集め、
+語っている集合が食い違う。** だから宣言を `unions/*.yaml` に集め、
 コードはそこから読む。
 
-    from dc5lib import ensemble
+    from dc5lib import union
     e = ensemble.get("union5")
     print(e.describe())
     ensemble.verify(e)            # 混ぜてよいかを確かめる。だめなら例外
@@ -44,7 +44,7 @@ from .registry import get as _get
 
 
 def dir_() -> Path:
-    return paths.REPO_ROOT / "ensembles"
+    return paths.REPO_ROOT / "unions"
 
 
 def names() -> list:
@@ -52,7 +52,7 @@ def names() -> list:
 
 
 @dataclass
-class Ensemble:
+class UnionSet:
     name: str
     base: str
     members: list
@@ -86,20 +86,20 @@ class Ensemble:
         return "\n".join(out)
 
 
-def get(name: str) -> Ensemble:
+def get(name: str) -> UnionSet:
     p = dir_() / f"{name}.yaml"
     if not p.exists():
         raise FileNotFoundError(
-            f"アンサンブルの定義がありません: {p}\n"
+            f"和集合（unions/）の定義がありません: {p}\n"
             f"あるのは {names()}")
     d = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-    return Ensemble(name=d.get("name", name), base=d["base"],
+    return UnionSet(name=d.get("name", name), base=d["base"],
                     members=list(d.get("members") or []),
                     label=d.get("label", ""), note=d.get("note", ""),
                     recorded=str(d.get("recorded", "")), path=p)
 
 
-def verify(e: Ensemble, strict=True) -> dict:
+def verify(e: UnionSet, strict=True) -> dict:
     """混ぜてよいかを確かめる。`strict` で例外にするか報告だけにするか。"""
     problems, warn = [], []
     conds = {}
@@ -143,13 +143,13 @@ def verify(e: Ensemble, strict=True) -> dict:
                     "本数を増やす効き目は構造か学習の違いだけになります")
 
     if problems and strict:
-        raise AssertionError("アンサンブルの検査で止めました:\n  - "
+        raise AssertionError("和集合の検査で止めました:\n  - "
                              + "\n  - ".join(problems))
     return {"problems": problems, "warn": warn,
             "fingerprints": fps, "unknown": unknown, "inputs": sig}
 
 
-def report(e: Ensemble) -> str:
+def report(e: UnionSet) -> str:
     r = verify(e, strict=False)
     out = [e.describe(), ""]
     if r["problems"]:

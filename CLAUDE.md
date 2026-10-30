@@ -25,12 +25,14 @@
 
 **`docs/アンサンブルの使い方.md` を読んでから動かすこと。**
 
-- **アンサンブルは2系統ある。** `ensembles.yaml`（1ファイル・確率を混ぜる）と
-  `ensembles/*.yaml`（フォルダ・和集合）。モジュールも `dc5lib/ensembles.py` と
-  `dc5lib/ensemble.py` で名前がほぼ同じ。**どちらの話かを必ず確かめる**
-- 構成員の名前を**コードに書かない**。`ensembles/*.yaml` にだけ書く
+- **アンサンブルは2系統ある。どちらの話かを必ず確かめる。**
+  旧＝確率を混ぜる（`ensembles.yaml` / `dc5lib/ensembles.py`）、
+  新＝和集合（`unions/*.yaml` / `dc5lib/union.py`）。
+  **新側は 2026-10-30 に `ensembles/` から `unions/` へ改名した** ──
+  古い手順書やコミットの `ensembles/` は `unions/` のことである
+- 構成員の名前を**コードに書かない**。`unions/*.yaml` にだけ書く
 - `recorded:` が付いた定義は**動かさない**。変えたいときは新しい yaml を作る
-- 測る前に `python -m dc5lib.ensemble <名前>` と
+- 測る前に `python -m dc5lib.union <名前>` と
   `tools/audit_splits.py` を通す。**分割が食い違ったら混ぜない**
 - 成否は箇所F ではなく**床**で見る
 

@@ -53,10 +53,10 @@ from dc5lib.traincfg import train_cfg                   # noqa: E402
 
 REGION_DIR = {"hiroshima": "Hiroshima", "shimane": "Shimane"}
 # 既定は和集合の構成員。**ここが揃っていなければ `42` 以降の数字が崩れる。**
-# **構成員は ensembles/union5.yaml に書いてある。** ここには書かない
-from dc5lib import ensemble as _ens                             # noqa: E402
+# **構成員は unions/union5.yaml に書いてある。** ここには書かない
+from dc5lib import union as _uni                             # noqa: E402
 
-DEFAULT = _ens.get("union5").all
+DEFAULT = _uni.get("union5").all
 
 
 def read_no(path: Path):
