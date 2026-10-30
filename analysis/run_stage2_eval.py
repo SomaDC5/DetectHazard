@@ -63,6 +63,15 @@ def run(stage1, model2, split, device, region="hiroshima", wide_ch=0,
     u_list = ([] if union_cond is None else
               ([union_cond] if not isinstance(union_cond, (list, tuple))
                else list(union_cond)))
+    # **1段目の3入力目（建物など）はこの経路では未対応。**
+    # 相方（union_logits）は third_planes で通るようにしたが、
+    # 1段目はまだ土地利用だけである。黙って落ちるより先に止める。
+    if minputs.third_input(stage1) is not None:
+        sys.exit(
+            f"1段目 {stage1.name} は3入力目"
+            f"（{minputs.third_input(stage1).field}）を要りますが、"
+            "この経路は土地利用以外の3入力目に未対応です。"
+            "和集合の相方としてなら --union-with で使えます")
     u_packs = [union_logits(c2, split, device, region=region) for c2 in u_list]
     pkl = dataset_path(dirname, stage1.pkl_for(dirname))
     print(f"  読み込み: {pkl.name}")
@@ -167,6 +176,16 @@ def prune(PB, drop):
     return out
 
 
+def u_list_names_differ(pp, given):
+    """定義と指定が食い違っていないか。指定が無ければ食い違いではない。
+
+    **記録する数字と実際に測ったものがずれるのを防ぐ。**
+    """
+    if not given:
+        return False
+    return list(pp.union_list) != list(given)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage1", default="FinalFusion_SAM_APM_OverlapTrain")
@@ -184,6 +203,8 @@ def main():
                     help="何で刈るか。keep=2段目の出力 / "
                          "logit_max=しきい値1本（同じ split で比べるための対照）")
     ap.add_argument("--record", action="store_true")
+    ap.add_argument("--thr-split", default="検証split",
+                    help="しきい値をどの split で選んだか。**記録に残る**")
     ap.add_argument("--device", default=None)
     args = ap.parse_args()
 
@@ -193,11 +214,25 @@ def main():
         pp = pp_mod.get(args.postprocess)
         args.stage1 = pp.base
         args.model = pp.model          # dc5lib/postprocess.py の既知の項目
+        # **定義の union_with を使う。** これが無いと --postprocess
+        # だけ指定したときに単体を測ってしまい、記録だけ
+        # 「和集合」になる（docs/設計_アンサンブルの記録.md の 3.3）
+        if not args.union_with:
+            args.union_with = list(pp.union_list)
         if args.thr is None:
             args.thr = pp.threshold
         print(f"後処理 {pp.name}: {pp.display()}")
     if args.record and not pp:
-        sys.exit("--record には --postprocess が必要です")
+        sys.exit("--record には --postprocess が必要です"
+                 "（ensembles.yaml の postprocess に定義する。"
+                 "docs/設計_アンサンブルの記録.md の 3.1）")
+    if pp and u_list_names_differ(pp, args.union_with):
+        sys.exit(
+            "--postprocess の union_with と --union-with が違います。" + chr(10)
+            + f"  定義 {list(pp.union_list)}" + chr(10)
+            + f"  指定 {list(args.union_with or [])}" + chr(10)
+            + "記録と実際に測ったものが食い違うので止めました。"
+              "--union-with を省けば定義のほうを使います")
     if not args.model:
         sys.exit("--model か --postprocess を指定してください")
 
@@ -274,7 +309,8 @@ def main():
         from analysis.run_overlap_prune import record
         res = full_scores(GT, pruned)
         print(f"  面積F {res[0]['f1']:.4f}（境界 {res[1]['f1']:.4f}）")
-        record(pp, args.region, res)
+        record(pp, args.region, res, thr=args.thr,
+               thr_split=args.thr_split)
 
 
 if __name__ == "__main__":

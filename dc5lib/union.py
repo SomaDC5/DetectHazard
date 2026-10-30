@@ -149,6 +149,55 @@ def verify(e: UnionSet, strict=True) -> dict:
             "fingerprints": fps, "unknown": unknown, "inputs": sig}
 
 
+def record(name, members, region, scores, n_blobs, floor, csv_name,
+           setting=None):
+    """**和集合そのもの**（刈り取り前）を `results/evals/` に記録する。
+
+    なぜ要るか
+    ----------
+    `42`〜`45` の和集合の箇所R/P/F と上限は **`metrics.csv` に無かった**
+    （`docs/設計_アンサンブルの記録.md` の `2.5`）。刈り取り後だけが
+    記録されていたので、「和集合で何本ぶん広がったか」を表から追えなかった。
+
+    `scores` は `(箇所R, 箇所P, 箇所F, 予測数)`。
+
+    **床と天井は `recall`/`precision` 列に入れない。** 箇所R/P/F の形を
+    していないので、入れると列の意味が壊れる（同 `3.4`）。`note` に書く。
+    """
+    from . import results as _R
+    from .instance_eval import PRIMARY
+
+    RU, PU, FU, nU = scores
+    cond = f"Union_{name}"
+    tileset = {"hiroshima": "警戒のみ", "shimane": "全件"}[region]
+    run_id = _R.new_run_id(cond)
+    prov = {"members": "|".join(members), "n_members": len(members)}
+    ceil_f = 2 * RU / (1 + RU) if RU else 0.0
+    pct = 100 * floor / max(n_blobs, 1)
+    note = (f"和集合そのもの（刈り取り前）。構成員 {len(members)}本。"
+            f"床 {floor:,}件 / {pct:.2f}%、天井 {100 - pct:.2f}%。"
+            f"正解のかたまり {n_blobs:,} / 予測 {nU:,}。"
+            f"出どころ {csv_name} / analysis/run_union_blind.py")
+    rows = (("和集合", RU, PU, FU),
+            ("和集合上限", RU, 1.0, ceil_f))
+    n = 0
+    for scope, r, pr, f1 in rows:
+        _R.record_eval(run_id=run_id, condition=cond, region=region,
+                       tileset=tileset, scope=scope, metric_kind="箇所",
+                       setting=setting or PRIMARY,
+                       recall=r, precision=pr, f1=f1,
+                       n_gt_instances=n_blobs, n_pred_instances=nU,
+                       note=note, **prov)
+        n += 1
+    out = _R.build_metrics_csv()
+    print(f"\n記録: evals {n} 件 / metrics.csv を更新（{out}）")
+    print(f"  condition={cond} / scope=和集合・和集合上限"
+          f" / 構成員 {len(members)}本")
+    print("  **床と天井は note にだけ書いた**"
+          "（箇所R/P/F の形をしていないので列に入れない）")
+    return cond
+
+
 def report(e: UnionSet) -> str:
     r = verify(e, strict=False)
     out = [e.describe(), ""]

@@ -284,3 +284,100 @@ postprocess:
     feature: stage2
     model: Stage2_Union3Agree_s1
     threshold: 0.50
+
+  # --- 6本の和集合（45）。**シードごとに定義を分ける。**
+  # record_eval の鍵（condition/region/tileset/scope/metric_kind/setting）に
+  # 2段目の重み名が入らないので、同じ名前だと後のシードが前を消す。
+  # docs/設計_アンサンブルの記録.md の 2.1 / 3.1
+  Post_Union6_Stage2_s1:
+    label: 6本の和集合 + OL推論 + 2段目CNN（seed 1）
+    note: >
+      展望_再現率をどう上げるか.md 45。3本（Post_Union3_Stage2）に
+      仮想建物あり・実建物のみ・その種だけ違う2本目の3つを足して6本にした。
+      刈り取り前 箇所R 0.8958（3本 0.8517）、上限 箇所F 0.9450（3本 0.9199）。
+      実測 広島 箇所F 0.7775（シード3本の平均。3本の 0.7705 を +0.0070 上回るが
+      **帯 0.0071 のふちで、箇所F では上がったと言えない**）。
+      内訳は 箇所R +0.0585（8.2帯）/ 箇所P -0.0402（-5.7帯）で、
+      **再現率を適合率で買っている。**
+      島根（全24,569枚）箇所F 0.6534。3本の 0.6212 を +0.0322 上回る
+      （帯 0.0198 の1.6倍）。**島根では箇所P も下がらない**（+0.0122）。
+      刈り取り前の箇所R が広島 0.8958 で天井に近く、足した構成員が
+      外れを増やすのに対し、島根は 0.7575 で伸びしろがあるため。
+      しきい値 0.40 は s1 の検証split で掃いて選び、3シードに共通で当てた
+      （シードごとに選び直していない。23.8 と同じ穴）。
+    base: FinalFusion_SAM_APM_OverlapTrain
+    union_with:
+      - FinalFusion_DEM_APM_OverlapTrain
+      - FinalFusion_SAM_APM_LU_OverlapTrain
+      - FinalFusion_SAM_APM_BVB_OverlapTrain
+      - FinalFusion_SAM_APM_BLD_OverlapTrain
+      - FinalFusion_SAM_APM_BLD_seed2_OverlapTrain
+    inference: オーバーラップ
+    feature: stage2
+    model: Stage2_Union6_s1
+    threshold: 0.40
+
+  Post_Union6_Stage2_s2:
+    label: 6本の和集合 + OL推論 + 2段目CNN（seed 2）
+    note: >
+      Post_Union6_Stage2_s1 と2段目の初期化シードだけが違う。
+      しきい値 0.40 は s1 の検証split で選んだ値。展望 45。
+    base: FinalFusion_SAM_APM_OverlapTrain
+    union_with:
+      - FinalFusion_DEM_APM_OverlapTrain
+      - FinalFusion_SAM_APM_LU_OverlapTrain
+      - FinalFusion_SAM_APM_BVB_OverlapTrain
+      - FinalFusion_SAM_APM_BLD_OverlapTrain
+      - FinalFusion_SAM_APM_BLD_seed2_OverlapTrain
+    inference: オーバーラップ
+    feature: stage2
+    model: Stage2_Union6_s2
+    threshold: 0.40
+
+  Post_Union6_Stage2_s3:
+    label: 6本の和集合 + OL推論 + 2段目CNN（seed 3）
+    note: >
+      Post_Union6_Stage2_s1 と2段目の初期化シードだけが違う。
+      しきい値 0.40 は s1 の検証split で選んだ値。展望 45。
+    base: FinalFusion_SAM_APM_OverlapTrain
+    union_with:
+      - FinalFusion_DEM_APM_OverlapTrain
+      - FinalFusion_SAM_APM_LU_OverlapTrain
+      - FinalFusion_SAM_APM_BVB_OverlapTrain
+      - FinalFusion_SAM_APM_BLD_OverlapTrain
+      - FinalFusion_SAM_APM_BLD_seed2_OverlapTrain
+    inference: オーバーラップ
+    feature: stage2
+    model: Stage2_Union6_s3
+    threshold: 0.40
+
+  # --- 3本の和集合の seed 2・3。**無印の Post_Union3_Stage2 が s1 である。**
+  # 記録済みの condition 名は改名しない（設計_アンサンブルの記録.md の 3.1）。
+  Post_Union3_Stage2_s2:
+    label: 3本の和集合 + OL推論 + 2段目CNN（seed 2）
+    note: >
+      Post_Union3_Stage2（これが s1）と2段目の初期化シードだけが違う。
+      6本（45）と3シード対3シードで比べるために足した。展望 23 / 45。
+    base: FinalFusion_SAM_APM_OverlapTrain
+    union_with:
+      - FinalFusion_DEM_APM_OverlapTrain
+      - FinalFusion_SAM_APM_LU_OverlapTrain
+    inference: オーバーラップ
+    feature: stage2
+    model: Stage2_Union3_s2
+    threshold: 0.45
+
+  Post_Union3_Stage2_s3:
+    label: 3本の和集合 + OL推論 + 2段目CNN（seed 3）
+    note: >
+      Post_Union3_Stage2（これが s1）と2段目の初期化シードだけが違う。
+      6本（45）と3シード対3シードで比べるために足した。展望 23 / 45。
+    base: FinalFusion_SAM_APM_OverlapTrain
+    union_with:
+      - FinalFusion_DEM_APM_OverlapTrain
+      - FinalFusion_SAM_APM_LU_OverlapTrain
+    inference: オーバーラップ
+    feature: stage2
+    model: Stage2_Union3_s3
+    threshold: 0.45
+

@@ -46,6 +46,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from analysis import config
 from analysis.data import load_pkl
 from analysis.run_overlap_eval import (OFFSETS, cos_window, grid_index,  # noqa: E402
+                                       plane_mosaic,
                                        mosaic, prep_mask)
 from dc5lib import inputs as minputs  # noqa: E402
 from dc5lib import landuse as _landuse  # noqa: E402
@@ -84,6 +85,26 @@ def cache_path(cond_name, split, wide=False, lu=False, union=None, agree=False):
     return d / f"{cond_name}__hiroshima__{split}{tag}.npz"
 
 
+def third_planes(cond, ds):
+    """3入力目（建物など。土地利用ではないもの）の面を pkl から取る。
+
+    **土地利用だけを通していたせいで、建物を相方にすると落ちていた。**
+    run_overlap_prune.infer と同じ作り方に揃えてある。
+    """
+    t3 = minputs.third_input(cond)
+    if t3 is None:
+        return None, None
+    if not hasattr(ds, t3.field):
+        raise AttributeError(
+            f"{cond.name} は3入力目 {t3.field} を要りますが pkl にありません。"
+            f"config の dataset を確かめてください")
+    P3 = np.asarray(getattr(ds, t3.field))
+    if P3.shape[1] != t3.channels:
+        raise ValueError(f"{t3.field} の面が {P3.shape[1]} ですが config は "
+                         f"{t3.channels} です")
+    return P3, t3
+
+
 @torch.no_grad()
 def union_logits(cond2, split, device, batch_hint=500, region="hiroshima"):
     """和集合の相方（2つめの条件）のロジットを、タイルごとに先に作る。
@@ -112,6 +133,10 @@ def union_logits(cond2, split, device, batch_hint=500, region="hiroshima"):
         tiles = [hz[i] for i in {"train": tr, "val": va, "test": te}[split]]
     print(f"  [和集合の相方] {cond2.name}: {len(tiles)} タイル")
 
+    P3, t3 = third_planes(cond2, ds)
+    if t3 is not None:
+        print(f"  [和集合の相方] 3入力目 {t3.field} {P3.shape[1]}面")
+
     model = build_model_for(cond2).to(device)
     load_weights(model, cond2.weights, device=device)
     model.eval()
@@ -122,13 +147,18 @@ def union_logits(cond2, split, device, batch_hint=500, region="hiroshima"):
     t0 = time.time()
     for n, k in enumerate(tiles):
         D, A, _, LU = mosaic(ds, cell, gi, gj, k)
-        dems, airs, lus = [], [], []
+        # 地形・写真と同じ鏡像で埋める（入力の面どうしを揃える）
+        M3 = (plane_mosaic(P3, cell, gi, gj, k, fill="mirror")
+              if P3 is not None else None)
+        dems, airs, lus, th3 = [], [], [], []
         for dy, dx in OFFSETS:
             r, c = 128 + dy, 128 + dx
             dems.append(D[r:r + 128, c:c + 128])
             airs.append(A[r:r + 128, c:c + 128])
             if LU is not None:
                 lus.append(LU[r:r + 128, c:c + 128])
+            if M3 is not None:
+                th3.append(M3[:, r:r + 128, c:c + 128])
         dem = torch.from_numpy(np.stack(dems)[:, None]).float().to(device)
         air = (torch.from_numpy(np.stack(airs).transpose(0, 3, 1, 2))
                .float().to(device) / 255.0)
@@ -136,6 +166,9 @@ def union_logits(cond2, split, device, batch_hint=500, region="hiroshima"):
         # （build と同じ判定。_lu.pkl を2入力の条件で読むと落ちる）
         extra = ([_landuse.onehot_torch(np.stack(lus), device=device)]
                  if (LU is not None and minputs.needs_landuse(cond2)) else [])
+        if M3 is not None:
+            extra.append(torch.from_numpy(np.stack(th3))
+                         .to(device).float() / 255.0)
         lo = model(dem, air, *extra)[:, 0]
         pr = torch.sigmoid(lo).cpu().numpy()
         lg = lo.cpu().numpy()
@@ -180,6 +213,15 @@ def build(cond, split, device, batch_hint=500, wide=False, lu=False,
     u_list = ([] if union_cond is None else
               ([union_cond] if not isinstance(union_cond, (list, tuple))
                else list(union_cond)))
+    # **1段目の3入力目（建物など）はこの経路では未対応。**
+    # 相方（union_logits）は third_planes で通るようにしたが、
+    # 1段目はまだ土地利用だけである。黙って落ちるより先に止める。
+    if minputs.third_input(cond) is not None:
+        sys.exit(
+            f"1段目 {cond.name} は3入力目"
+            f"（{minputs.third_input(cond).field}）を要りますが、"
+            "この経路は土地利用以外の3入力目に未対応です。"
+            "和集合の相方としてなら --union-with で使えます")
     u_packs = [union_logits(c2, split, device) for c2 in u_list]
 
     pkl = dataset_path("Hiroshima",

@@ -235,22 +235,46 @@ def full_scores(GT, PB):
             len(GT))
 
 
-def record(pp, region, res):
-    """results/evals/ に記録する。アンサンブルと同じ扱いで condition 列に名前を入れる。"""
+def record(pp, region, res, thr=None, thr_split=""):
+    """results/evals/ に記録する。アンサンブルと同じ扱いで condition 列に名前を入れる。
+
+    素性（docs/設計_アンサンブルの記録.md の 3.3）
+    ------------------------------------------
+    **pp から取れるものは pp から取る。** 呼ぶ側に二重に持たせない。
+
+        members / n_members   pp.union_list + pp.base（**誰を混ぜたか**）
+        stage2_model          pp.model（**シードの判別に要る**）
+        thr / thr_split       実際に当てた値と、それを選んだ split
+
+    なぜ要るか。`pp.display()` は label の散文なので、**構成員も2段目の
+    重み名も機械では取り出せなかった**。シードを分けて記録するには
+    後処理の定義ごと分ける必要がある（record_eval の鍵に model が
+    入らないので、同じ名前だと後のものが前のものを消す）。
+    """
     from dc5lib import results as R
 
     a_full, a_cent, inst, n_tiles = res
     tileset = {"hiroshima": "警戒のみ", "shimane": "全件"}[region]
     run_id = R.new_run_id(pp.name)
-    note = (f"後処理（{pp.display()}）。base={pp.base} / 推論={pp.inference} / "
-            f"{pp.feature}<={pp.threshold:g} のかたまりを捨てる。"
-            f"ensembles.yaml の postprocess / run_overlap_prune.py")
+    members = [pp.base] + list(pp.union_list)
+    thr = pp.threshold if thr is None else thr
+    prov = {"members": "|".join(members), "n_members": len(members),
+            "stage2_model": pp.model or "", "thr": thr,
+            "thr_split": thr_split}
+    head = (f"後処理（{pp.display()}）。base={pp.base} / 推論={pp.inference} / "
+            f"{pp.feature}<={thr:g} のかたまりを捨てる。"
+            f"構成員 {len(members)}本")
+    if pp.model:
+        head += f" / 2段目 {pp.model}"
+    if thr_split:
+        head += f" / しきい値は {thr_split} で選んだ"
+    note = head + "。ensembles.yaml の postprocess / run_overlap_prune.py"
     n = 0
     for scope, a in (("通常", a_full), ("境界", a_cent)):
         R.record_eval(run_id=run_id, condition=pp.name, region=region,
                       tileset=tileset, scope=scope, metric_kind="面積",
                       recall=a["recall"], precision=a["precision"], f1=a["f1"],
-                      n_tiles=n_tiles, note=note)
+                      n_tiles=n_tiles, note=note, **prov)
         n += 1
     for setting, r in inst.items():
         R.record_eval(run_id=run_id, condition=pp.name, region=region,
@@ -259,10 +283,13 @@ def record(pp, region, res):
                       precision=r["箇所Precision"], f1=r["箇所F値"],
                       n_gt_instances=r["箇所_正解数"],
                       n_pred_instances=r["箇所_予測数"],
-                      note="連結性8近傍 / 最小サイズ10px / 後処理")
+                      note="連結性8近傍 / 最小サイズ10px / " + head, **prov)
         n += 1
     out = R.build_metrics_csv()
     print(f"\n記録: evals {n} 件 / metrics.csv を更新（{out}）")
+    print(f"  構成員 {len(members)}本 / 2段目 {pp.model or '—'}"
+          f" / しきい値 {thr:g}"
+          f"{'（' + thr_split + ' で選んだ）' if thr_split else ''}")
 
 
 def main():

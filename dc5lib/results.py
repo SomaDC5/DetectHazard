@@ -35,6 +35,9 @@ COLUMNS = [
     "recall", "precision", "f1",
     "tp", "fp", "fn", "n_tiles", "n_gt_instances", "n_pred_instances",
     "evaluated_at", "machine", "weights_sha256", "note",
+    # アンサンブル（和集合）の素性。docs/設計_アンサンブルの記録.md の 3.2
+    # **既存の記録には空で入る。** DictWriter が無い項目を空欄にするだけで壊れない
+    "members", "n_members", "stage2_model", "thr", "thr_split",
 ]
 
 _SAFE = re.compile(r"[^A-Za-z0-9_.-]")

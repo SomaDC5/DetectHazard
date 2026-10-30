@@ -119,6 +119,12 @@ def main():
     ap.add_argument("--members", nargs="*", default=[STAGE1] + UNION3)
     ap.add_argument("--device", default=None)
     ap.add_argument("--save", action="store_true")
+    ap.add_argument("--record", action="store_true",
+                    help="和集合そのものを results/evals/ に記録する"
+                         "（--name が要る。docs/設計_アンサンブルの記録.md の 3.4）")
+    ap.add_argument("--name", default="",
+                    help="記録に使うアンサンブルの名前（unions/<これ>.yaml の名前）。"
+                         "condition は Union_<これ> になる")
     ap.add_argument("--tag", default="",
                     help="保存名の後ろに付ける印（union_blind__<地域>__<印>.csv）。"
                          "**構成員が記録済みの5本と違うときは必須**")
@@ -133,6 +139,12 @@ def main():
         print(f"  {short(n)}")
 
     guard_save(a.save, a.tag, [short(n) for n in names])
+    # **推論の前に止める。** あとで止めると1時間回してから怒られる
+    if a.record and not a.name:
+        sys.exit("--record には --name が要ります（condition を Union_<名前> にするため）。"
+                 "unions/*.yaml の名前を渡してください")
+    if a.record and not a.save:
+        sys.exit("--record には --save が要ります（出どころの CSV 名を記録に残すため）")
 
     base = None
     labels = None
@@ -253,6 +265,11 @@ def main():
                   else f"union_blind__{a.region}__{a.tag}.csv")
         df.to_csv(p, index=False, encoding="utf-8")
         print(f"\n保存: {p}")
+        if a.record:
+            from dc5lib import union as _uni
+            _uni.record(a.name, names, a.region, (RU, PU, FU, nU),
+                        len(df), int((df[cc] <= 0).all(axis=1).sum()),
+                        p.name)
 
 
 if __name__ == "__main__":
