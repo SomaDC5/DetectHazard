@@ -145,6 +145,21 @@ def main():
                  "unions/*.yaml の名前を渡してください")
     if a.record and not a.save:
         sys.exit("--record には --save が要ります（出どころの CSV 名を記録に残すため）")
+    # **--name で指す定義と --members が一致するか。**
+    # 実際に取り違えた: unions/*.yaml の members は**基準を含まない**ので、
+    # それをそのまま --members に渡すと基準が1本抜けたまま測ってしまい、
+    # 記録だけ「6本」になる（2026-10-31）。
+    if a.name:
+        from dc5lib import union as _uni
+        want = list(_uni.get(a.name).all)
+        if names != want:
+            sys.exit(
+                f"--name {a.name} の定義と --members が違います。" + chr(10)
+                + f"  定義（基準を含む {len(want)}本）{want}" + chr(10)
+                + f"  指定（{len(names)}本）{names}" + chr(10)
+                + "unions/*.yaml の members は**基準を含みません**。"
+                  "python -m dc5lib.union の一覧か、"
+                  "union.get(name).all を使ってください")
 
     base = None
     labels = None

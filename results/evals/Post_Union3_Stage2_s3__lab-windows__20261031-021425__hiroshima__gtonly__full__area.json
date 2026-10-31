@@ -1,0 +1,22 @@
+{
+ "condition": "Post_Union3_Stage2_s3",
+ "eval_id": "Post_Union3_Stage2_s3__lab-windows__20261031-021425__hiroshima__gtonly__full__area",
+ "evaluated_at": "2026-10-31T02:14:25",
+ "f1": 0.69952,
+ "machine": "lab-windows",
+ "members": "FinalFusion_SAM_APM_OverlapTrain|FinalFusion_DEM_APM_OverlapTrain|FinalFusion_SAM_APM_LU_OverlapTrain",
+ "metric_kind": "面積",
+ "n_members": 3,
+ "n_tiles": 2964,
+ "note": "後処理（3本の和集合 + OL推論 + 2段目CNN（seed 3））。base=FinalFusion_SAM_APM_OverlapTrain / 推論=オーバーラップ / stage2<=0.45 のかたまりを捨てる。構成員 3本 / 2段目 Stage2_Union3_s3 / しきい値は 広島の検証split で選んだ。ensembles.yaml の postprocess / run_overlap_prune.py",
+ "precision": 0.605233,
+ "recall": 0.828606,
+ "region": "hiroshima",
+ "run_id": "Post_Union3_Stage2_s3__lab-windows__20261031-021425",
+ "scope": "通常",
+ "setting": "",
+ "stage2_model": "Stage2_Union3_s3",
+ "thr": 0.45,
+ "thr_split": "広島の検証split",
+ "tileset": "警戒のみ"
+}
