@@ -273,6 +273,25 @@ try:
 except Exception as _e:                                   # noqa: BLE001
     problems.append(f"配線の検査ができませんでした: {_e}")
 
+# docs/実装書.md の署名と定数が、いまのコードと合っているか。
+# **「これだけ読めば実装できる」と書いた文書が古いのは一番害が大きい。**
+try:
+    import io as _io
+    import contextlib as _ctx
+    sys.argv = [sys.argv[0]]
+    from tools import verify_docs as _vd
+    _buf = _io.StringIO()
+    try:
+        with _ctx.redirect_stdout(_buf):
+            _vd.main()
+    except SystemExit as _se:
+        if _se.code:
+            problems.append(
+                "docs/実装書.md がコードと食い違っています"
+                "（python tools/verify_docs.py で詳細）")
+except Exception as _e:                                   # noqa: BLE001
+    problems.append(f"実装書の照合ができませんでした: {_e}")
+
 if problems:
     print("検査で問題が見つかりました:")
     for p in problems:

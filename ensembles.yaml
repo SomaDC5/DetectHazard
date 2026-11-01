@@ -387,3 +387,73 @@ postprocess:
     model: Stage2_Union3_s3
     threshold: 0.45
 
+  # --- 6本の和集合 + 合意数チャネル（45.7）。**シードごとに定義を分ける。**
+  Post_Union6Agree_Stage2_s1:
+    label: 6本の和集合 + 合意数チャネル + OL推論 + 2段目CNN（seed 1）
+    note: >
+      展望_再現率をどう上げるか.md 24 / 45.7。和集合（OR = max ロジット）は
+      **何本が反応したかを捨てている** ── 1本だけが言った箇所と全員が言った箇所が
+      同じ値になる。そこで ch7 に「陽性にしたモデル数 / 全モデル数」を足した。
+      24 は3本で広島 +0.0079 だった。6本なら合意数が1/6〜6/6 の6段階になり
+      分解能が上がるはず、という読みで試した。
+      44.9 の実測では、1本だけ光った群の和集合での検出率が 0.3643、
+      6本揃った群が 0.9862 で、合意数は的中と外れをよく分ける。
+      2段目の検証AUC 0.8386/0.8400/0.8363（合意数なし 0.8323/0.8329/0.8320）。
+      しきい値 0.50 は s1 の広島の検証split で掃いて選んだ
+      （合意数なしは 0.40。検証split の最良は 0.7841 対 0.7763）。
+      実測 広島 箇所F 0.7908（3シード平均。合意数なしの 0.7775 を +0.0133
+      = 1.9帯 上回り、シードの範囲も重ならない：なし 0.7750-0.7811 対
+      あり 0.7895-0.7924）。**これが広島での最良値である。**
+      島根 0.6564。合意数なしの 0.6528 に対して +0.0036 = 0.2帯 で、
+      範囲も重なる（なし 0.6516-0.6534 対 あり 0.6528-0.6625）
+      → **島根では効かない。** 24.11 の「未学習県では合意数が効きにくい」が
+      6本でも成り立った。
+      **向きが和集合と逆である。** 和集合を3本→6本にすると
+      箇所R +8.2帯 / 箇所P -5.7帯 だが、合意数を足すと
+      箇所R -4.9帯 / 箇所P +8.1帯。6本にして落ちた適合率を、
+      増やしたこと自体が生んだ情報で取り返している（45.7）。
+    base: FinalFusion_SAM_APM_OverlapTrain
+    union_with:
+      - FinalFusion_DEM_APM_OverlapTrain
+      - FinalFusion_SAM_APM_LU_OverlapTrain
+      - FinalFusion_SAM_APM_BVB_OverlapTrain
+      - FinalFusion_SAM_APM_BLD_OverlapTrain
+      - FinalFusion_SAM_APM_BLD_seed2_OverlapTrain
+    inference: オーバーラップ
+    feature: stage2
+    model: Stage2_Union6Agree_s1
+    threshold: 0.50
+
+  Post_Union6Agree_Stage2_s2:
+    label: 6本の和集合 + 合意数チャネル + OL推論 + 2段目CNN（seed 2）
+    note: >
+      Post_Union6Agree_Stage2_s1 と2段目の初期化シードだけが違う。展望 45.7。
+    base: FinalFusion_SAM_APM_OverlapTrain
+    union_with:
+      - FinalFusion_DEM_APM_OverlapTrain
+      - FinalFusion_SAM_APM_LU_OverlapTrain
+      - FinalFusion_SAM_APM_BVB_OverlapTrain
+      - FinalFusion_SAM_APM_BLD_OverlapTrain
+      - FinalFusion_SAM_APM_BLD_seed2_OverlapTrain
+    inference: オーバーラップ
+    feature: stage2
+    model: Stage2_Union6Agree_s2
+    threshold: 0.50
+
+  Post_Union6Agree_Stage2_s3:
+    label: 6本の和集合 + 合意数チャネル + OL推論 + 2段目CNN（seed 3）
+    note: >
+      Post_Union6Agree_Stage2_s1 と2段目の初期化シードだけが違う。展望 45.7。
+    base: FinalFusion_SAM_APM_OverlapTrain
+    union_with:
+      - FinalFusion_DEM_APM_OverlapTrain
+      - FinalFusion_SAM_APM_LU_OverlapTrain
+      - FinalFusion_SAM_APM_BVB_OverlapTrain
+      - FinalFusion_SAM_APM_BLD_OverlapTrain
+      - FinalFusion_SAM_APM_BLD_seed2_OverlapTrain
+    inference: オーバーラップ
+    feature: stage2
+    model: Stage2_Union6Agree_s3
+    threshold: 0.50
+
+
