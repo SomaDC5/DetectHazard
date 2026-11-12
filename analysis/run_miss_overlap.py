@@ -137,6 +137,9 @@ def main():
     dev = torch.device(args.device) if args.device else pick_device()
     names = args.conditions or DEFAULT
     print(f"device = {dev} / 条件 {len(names)}本")
+    # **混ぜてよいかを推論の前に確かめる**（設計書 §7。2026-11-12 のレビュー）
+    for _w in _uni.verify_names(names)["warn"]:
+        print(f"  ※ {_w}")
 
     masks, logits, labels, gts = {}, {}, {}, None
     for name in names:

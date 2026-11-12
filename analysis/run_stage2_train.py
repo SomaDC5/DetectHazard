@@ -22,11 +22,15 @@
     # かたまりデータを作る（1段目の推論。数分。SSDにキャッシュ）
     python analysis/run_stage2_train.py --build
 
-    # 学習（キャッシュから。軽い）
-    python analysis/run_stage2_train.py --train --name Stage2_SAM_OL_v1
+    # 学習（キャッシュから。軽い）。**--name は新しい名前にする**
+    python analysis/run_stage2_train.py --train --name <新しい名前>
 
     # まとめて
-    python analysis/run_stage2_train.py --build --train --name Stage2_SAM_OL_v1
+    python analysis/run_stage2_train.py --build --train --name <新しい名前>
+
+`--name` の既定 `Stage2_SAM_OL_v1` は**既にある重み**なので、付け忘れると
+学習の前に止まる（`guard_existing_weights`。作り直すなら `--overwrite`）。
+以前の例はこの名前を書いていた（2026-11-12 に直した）。
 """
 
 from __future__ import annotations
@@ -121,7 +125,7 @@ def union_logits(cond2, split, device, batch_hint=500, region="hiroshima"):
     （assert で確かめる）。
     """
     dirname = {"hiroshima": "Hiroshima", "shimane": "Shimane"}[region]
-    pkl = dataset_path(dirname, cond2.pkl_for(dirname))
+    pkl = cond2.pkl_for(dirname)
     print(f"  [和集合の相方] 読み込み: {pkl.name}")
     ds = load_pkl(pkl)
     if region == "shimane":
@@ -224,8 +228,10 @@ def build(cond, split, device, batch_hint=500, wide=False, lu=False,
             "和集合の相方としてなら --union-with で使えます")
     u_packs = [union_logits(c2, split, device) for c2 in u_list]
 
-    pkl = dataset_path("Hiroshima",
-                       pkl_override or cond.pkl_for("Hiroshima"))
+    # pkl_override はファイル名だけ。無いときは条件から引く
+    # (dataset_path に絶対パスを渡すと pathlib が左を捨てるだけなので通さない)
+    pkl = (dataset_path("Hiroshima", pkl_override) if pkl_override
+           else cond.pkl_for("Hiroshima"))
     print(f"  読み込み: {pkl.name}")
     ds = load_pkl(pkl)
     hz = [k for k in range(len(ds.No)) if np.max(np.asarray(ds.Mask[k])) >= 1]
@@ -384,10 +390,30 @@ def augment(x, jitter=0):
     return x
 
 
+def guard_existing_weights(name, overwrite=False):
+    """**既存の2段目の重みを黙って作り直さない**（CLAUDE.md・設計書 §8）。
+
+    1段目の `fit` には同じ歯止めがあるが、こちらには無かった
+    （2026-11-12 のレビュー）。`--name` の既定は固定の名前なので、
+    付け忘れると既存の重みを上書きする。後処理の定義（`ensembles.yaml` の
+    `postprocess:`）が指している重みを作り直すと、**記録した数字が
+    二度と出なくなる。** 学習を始める前に呼ぶ。
+    """
+    out = paths.data_root() / "weights" / name / "best_model.pth"
+    if out.exists() and not overwrite:
+        raise FileExistsError(
+            f"2段目の重み {name} が既にあります（{out}）。"
+            "**学習すると上書きされます。** 別の --name を付けるか、"
+            "作り直してよいなら --overwrite を付けてください。")
+    return out
+
+
 def train(cond, name, device, epochs=60, batch_size=128, lr=1e-3,
           patience=12, seed=42, split_seed=42, val_frac=0.2, use_augment=False,
           no_scalar=False, no_logit=False, weight_decay=0.0, jitter=0,
-          wide=False, lu=False, no_narrow=False, union=None, agree=False):
+          wide=False, lu=False, no_narrow=False, union=None, agree=False,
+          overwrite=False):
+    guard_existing_weights(name, overwrite)
     stage2.set_agree_channel(agree)
     f = cache_path(cond.name, "val", wide, lu, union=union, agree=agree)
     if not f.exists():
@@ -519,7 +545,14 @@ def train(cond, name, device, epochs=60, batch_size=128, lr=1e-3,
                 "stage1": cond.name, "crop": stage2.CROP,
                 "wide_ch": stage2.N_WIDE_CH if wide else 0,
                 "wide": bool(wide), "landuse": bool(lu),
-                "in_ch": stage2.N_CH, "agree": bool(agree)}, out)
+                "in_ch": stage2.N_CH, "agree": bool(agree),
+                # **何で学習したかを重みに残す**（2026-11-12）。相方と乱数の種は
+                # それまで重みのどこにも無く、後処理の定義と人の記憶だけが
+                # 頼りだった。`run_stage2_eval.py` が相方を照合する。
+                "union": list(([union] if isinstance(union, str) else union)
+                              or []),
+                "seed": int(seed), "split_seed": int(split_seed),
+                "val_frac": float(val_frac)}, out)
     print("重みを保存:", out)
     return out
 
@@ -565,11 +598,20 @@ def main():
     ap.add_argument("--split-seed", type=int, default=42,
                     help="学習/検証のタイル分割。既定で固定しておくと "
                          "分割のゆらぎを混ぜずに初期化のゆらぎだけ測れる")
+    ap.add_argument("--overwrite", action="store_true",
+                    help="既存の2段目の重みを作り直す（既定は止まる）")
     ap.add_argument("--device", default=None)
     args = ap.parse_args()
 
     if not (args.build or args.train):
         sys.exit("--build か --train のどちらかを指定してください")
+    # **--build（1段目の推論）の前に止める。** あとで止めると
+    # かたまりデータを作り終えてから怒られる
+    if args.train:
+        try:
+            guard_existing_weights(args.name, args.overwrite)
+        except FileExistsError as e:
+            sys.exit(str(e))
 
     cond = get(args.stage1)
     device = torch.device(args.device) if args.device else pick_device()
@@ -591,7 +633,8 @@ def main():
               jitter=args.jitter, wide=args.wide, lu=args.landuse,
               no_narrow=args.no_narrow,
               seed=args.seed, split_seed=args.split_seed,
-              union=args.union_with, agree=args.agree)
+              union=args.union_with, agree=args.agree,
+              overwrite=args.overwrite)
 
 
 if __name__ == "__main__":

@@ -42,7 +42,7 @@ from dc5lib.device import pick_device                          # noqa: E402
 from dc5lib.losses import (FocalTverskyLogitMarginLoss,        # noqa: E402
                            FocalTverskyLoss)
 from dc5lib.models import build_model_for, load_weights        # noqa: E402
-from dc5lib.paths import cache_dir, dataset_path               # noqa: E402
+from dc5lib.paths import cache_dir                             # noqa: E402
 from dc5lib.registry import get                                # noqa: E402
 
 PAIR = ["FinalFusion_SAM_APM", "FinalFusion_SAM_APM_OverlapTrain"]
@@ -51,7 +51,7 @@ DIRNAME = {"hiroshima": "Hiroshima", "shimane": "Shimane"}
 
 def _tiles(cond, region="hiroshima"):
     d = DIRNAME[region]
-    return build_tileset(dataset_path(d, cond.pkl_for(d)), region,
+    return build_tileset(cond.pkl_for(d), region,
                          cond.use_airphoto, bg_ratio=0.0, verbose=False,
                          need_landuse=minputs.needs_landuse(cond))
 

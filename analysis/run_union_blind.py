@@ -59,10 +59,48 @@ COV_GT = 0.5        # `run_miss_coverage.py` と同じ。変えると比較で�
 MIN_SIZE = 10
 BAND = {"hiroshima": 0.0071, "shimane": 0.0198}
 
+def short(name):
+    """`FinalFusion_SAM_APM_LU_OverlapTrain` -> `SAM_APM_LU`。"""
+    return name.replace("FinalFusion_", "").replace("_OverlapTrain", "")
+
+
 # 無印の union_blind__<地域>.csv に入っている構成員（略称・この順）。
 # **44.4/44.6 の数字の出どころなので、構成員が違うまま無印で上書きさせない。**
-RECORDED5 = ["SAM_APM", "DEM_APM", "SAM_APM_LU", "SAM_APM_BVB",
-             "SAM_APM_BLD"]
+# **名前はここに書かない**（CLAUDE.md）。`unions/union5.yaml` から引く
+# （2026-11-12。以前は5本の略称を直書きしていた。値は同じことを確かめてある）。
+from dc5lib import union as _union5                                  # noqa: E402
+
+RECORDED5 = [short(n) for n in _union5.get("union5").all]
+
+
+def csv_path(region, tag):
+    od = paths.cache_dir("analysis") / "coverage"
+    return od / (f"union_blind__{region}.csv" if not tag
+                 else f"union_blind__{region}__{tag}.csv")
+
+
+def guard_overwrite(save, region, tag, shorts):
+    """**印つきの CSV も、別の構成員で上書きさせない。推論の前に呼ぶ。**
+
+    `guard_save` が守るのは無印の1枚だけだった。印つき（`__union6` など）も
+    `44.7`／`44.8` の数字の出どころで、同じ印を別の構成員で使うと黙って
+    置き換わる（2026-11-12 のレビュー）。既存の CSV の列（`cov_<略称>`）と
+    比べ、**同じ構成員の測り直しなら通す。**
+    """
+    p = csv_path(region, tag)
+    if not save or not p.exists():
+        return
+    with open(p, encoding="utf-8") as f:
+        cols = f.readline().strip().lstrip("﻿").split(",")
+    have = [c[len("cov_"):] for c in cols
+            if c.startswith("cov_") and c != "cov_union"]
+    if have != list(shorts):
+        sys.exit(
+            f"{p.name} は別の構成員で作った表です。" + chr(10)
+            + f"  いまの表の構成員 {have}" + chr(10)
+            + f"  いまの指定       {list(shorts)}" + chr(10)
+            + "**上書きすると過去の記述が復元できなくなります。** --tag を変えて"
+              "ください（**推論を始める前に止めました**）")
 
 
 def guard_save(save, tag, shorts):
@@ -78,11 +116,6 @@ def guard_save(save, tag, shorts):
         + f"  いまの構成員     {shorts}" + chr(10)
         + "構成員が違うまま無印で保存すると過去の記述が復元できなくなります。"
           "--tag を付けてください（**推論を始める前に止めました**）")
-
-
-def short(name):
-    """`FinalFusion_SAM_APM_LU_OverlapTrain` -> `SAM_APM_LU`。"""
-    return name.replace("FinalFusion_", "").replace("_OverlapTrain", "")
 
 
 def blob_cov(GT, PB, LG=None, labels=None):
@@ -139,6 +172,7 @@ def main():
         print(f"  {short(n)}")
 
     guard_save(a.save, a.tag, [short(n) for n in names])
+    guard_overwrite(a.save, a.region, a.tag, [short(n) for n in names])
     # **推論の前に止める。** あとで止めると1時間回してから怒られる
     if a.record and not a.name:
         sys.exit("--record には --name が要ります（condition を Union_<名前> にするため）。"
@@ -160,6 +194,18 @@ def main():
                 + "unions/*.yaml の members は**基準を含みません**。"
                   "python -m dc5lib.union の一覧か、"
                   "union.get(name).all を使ってください")
+
+    # **混ぜてよいかを推論の前に確かめる**（設計書 §7）。`union.verify` は
+    # 「例外で止める」と書いてあるのに、**呼んでいるスクリプトが1本も
+    # 無かった**（2026-11-11 のレビュー）。`--name` が無くても掛ける ──
+    # `--members` に名前を直接並べれば yaml の定義を経ずに混ぜられる。
+    from dc5lib import union as _uni
+    for _w in _uni.verify_names(names)["warn"]:
+        print(f"  ※ {_w}")
+    # 学習に使った地域の、学習タイルを含む集合は記録しない（実装書 §8）
+    if a.record:
+        from dc5lib.evaluate import check_training_region_names
+        check_training_region_names(names, a.region)
 
     base = None
     labels = None
@@ -274,10 +320,8 @@ def main():
               f"{float((s.cov_union >= COV_GT).mean()):>18.4f}")
 
     if a.save:
-        od = paths.cache_dir("analysis") / "coverage"
-        od.mkdir(parents=True, exist_ok=True)
-        p = od / (f"union_blind__{a.region}.csv" if not a.tag
-                  else f"union_blind__{a.region}__{a.tag}.csv")
+        p = csv_path(a.region, a.tag)
+        p.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(p, index=False, encoding="utf-8")
         print(f"\n保存: {p}")
         if a.record:

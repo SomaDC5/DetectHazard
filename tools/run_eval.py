@@ -12,6 +12,16 @@
     python tools/run_eval.py <条件名> --region Shimane
     python tools/run_eval.py <条件名> --no-record      # 記録せず見るだけ
 
+**記録できるのは広島のテスト 2,964枚だけ**（実装書 §8）。
+
+- `--split train/val` は `--no-record` と一緒でないと止まる
+  （記録の鍵に split が入らないのでテストの行を置き換える。設計書 §6）
+- **島根は記録できない。** この道具が測るのは `build_loaders` が割った
+  テスト 1,936枚で、**その枚数にラベルが無い。**
+  島根を記録する経路は `analysis/run_overlap_eval.py --record`（主系統
+  24,569枚）と `templates/eval_shimane.ipynb` のセル3（補助 9,679枚）
+- 判断は `dc5lib/evaluate.py` の `can_record_split` が持つ。**ここに書き写さない**
+
 **オーバーラップ推論ではない。** `42`〜`44` の数字はそちらで、
 `analysis/run_overlap_eval.py --record` が担当する。ここは
 学習ノートブックの最後に出る値（素のタイル）と同じものである。
@@ -35,18 +45,35 @@ except Exception:
     pass
 
 from dc5lib import ckpt                                       # noqa: E402
-from dc5lib.evaluate import evaluate                          # noqa: E402
+from dc5lib.evaluate import can_record_split, evaluate        # noqa: E402
 from dc5lib.pipeline import build_loaders, seed_everything    # noqa: E402
 from dc5lib.registry import get                               # noqa: E402
 from dc5lib.traincfg import train_cfg                         # noqa: E402
 
 
 def split_key(cond, region):
-    """同じ pkl・同じ分割なら loaders を使い回せる。6GB の pkl を読み直さない。"""
+    """同じ pkl・同じ分割なら loaders を使い回せる。6GB の pkl を読み直さない。
+
+    **`split:` が空のときは `train:` の値が使われる**（`splits.resolve` が
+    `cfg` に落ちる）。`split:` だけ見ていると、`train.test_size` を変えた
+    条件を「同じ分割」と見て loaders を使い回してしまう
+    （2026-11-08。レビュー 4。該当は `AttentionUNet_SAM_APM256` の1本で、
+    値が既定と同じなので実害は出ていなかった）。
+    """
     sp = cond.split or {}
+    cfg = train_cfg(cond)
+    # **loaders は入力の中身も抱えている**（地形・写真・3入力目の配列）。
+    # pkl と分割が同じでも、読む欄（`field`）が違えば使い回せない ──
+    # 入力の本数が同じだと落ちずに**別の欄で測ってしまう**。
+    # csv 分割は表の名前も鍵に入れる（2026-11-11 のレビュー。いまの条件に
+    # 該当する組は無い。実測 0 組）。
     return (region, (cond.dataset or {}).get(region),
-            sp.get("kind"), sp.get("test_size"), sp.get("val_size"),
-            sp.get("random_state"), float(getattr(cond, "bg_ratio", 0) or 0))
+            sp.get("kind"), sp.get("file"),
+            sp.get("test_size", cfg.test_size),
+            sp.get("val_size", cfg.val_size),
+            sp.get("random_state", cfg.random_state),
+            float(getattr(cond, "bg_ratio", 0) or 0),
+            tuple((i.field, i.source, i.channels) for i in cond.inputs))
 
 
 def main():
@@ -58,6 +85,20 @@ def main():
     ap.add_argument("--no-record", action="store_true")
     ap.add_argument("--no-instance", action="store_true")
     a = ap.parse_args()
+
+    # **pkl を読む前に止める**（設計書 §7）。規則は `dc5lib/evaluate.py` の
+    # `can_record_split` が1か所で持つ ── ここに書き写さない（再々レビュー 5）。
+    if not a.no_record:
+        ok, why = can_record_split(a.region, a.split)
+        if not ok:
+            msg = f"{why}。見るだけなら --no-record を付けてください。"
+            # **島根の案内は島根のときだけ付ける**（4回目のレビュー F）
+            if a.region.lower() == "shimane":
+                msg += ("\n  島根を記録する経路は2つ ── 主系統（全24,569枚）は"
+                        " analysis/run_overlap_eval.py --record、"
+                        "背景を含まない補助（正解あり9,679枚）は"
+                        " templates/eval_shimane.ipynb のセル3です。")
+            sys.exit(msg)
 
     ld = key = None
     for i, name in enumerate(a.conditions):

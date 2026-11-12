@@ -21,6 +21,11 @@ status: active
 protocol: v1-blocksplit
 # 和集合（アンサンブル）に入れてよいか
 ensemble: false
+# **分割は乱数ではない。** ここを書かないと splits.resolve が黙って random に
+# 落ち、build_loaders が学習時と違う分割（8,889/2,963/2,964）を作る
+# （2026-11-08 に発覚。docs/レビュー_2026-11-08.md の 7.1）。
+# 表は splits/hiroshima_block_20km.csv（8,914 / 2,229 / 3,673）。
+split: {kind: csv, file: hiroshima_block_20km}
 # torch.manual_seed を呼んで学習したか
 seeded: false
 label: Final SAM+APM ブロック分割

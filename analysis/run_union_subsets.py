@@ -46,7 +46,25 @@ from dc5lib import paths                                         # noqa: E402
 # `run_union_blind.py` と同じ値。変えると比較できない
 COV_GT = 0.5
 BAND = {"hiroshima": 0.0071, "shimane": 0.0198}
-BASE = ["SAM_APM", "DEM_APM", "SAM_APM_LU"]        # `UNION3`。`42` からの手札
+
+
+def _shorts(name):
+    """`unions/<name>.yaml` の構成員（基準が先頭）を、CSV の列の略称で返す。
+
+    **構成員の名前をコードに書かない**（CLAUDE.md）。以前は土台の3本と
+    候補の2本を略称で直書きしていた（2026-11-12 のレビュー。値は同じ）。
+    このスクリプトは推論しないので、torch を読む `dc5lib.union` は使わず
+    yaml を直接読む。
+    """
+    import yaml
+    d = yaml.safe_load((paths.REPO_ROOT / "unions" / f"{name}.yaml")
+                       .read_text(encoding="utf-8"))
+    return [n.replace("FinalFusion_", "").replace("_OverlapTrain", "")
+            for n in [d["base"]] + list(d.get("members") or [])]
+
+
+BASE = _shorts("union3")                           # `42` からの手札
+CANDIDATES = [s for s in _shorts("union5") if s not in BASE]
 
 
 def load(region, tag):
@@ -129,8 +147,7 @@ def main():
                     help="CSV の名前の後ろに付いている印（union_blind__<地域>__<印>.csv）")
     ap.add_argument("--base", nargs="+", default=BASE,
                     help="土台にする構成員の略称")
-    ap.add_argument("--candidates", nargs="*",
-                    default=["SAM_APM_BVB", "SAM_APM_BLD"],
+    ap.add_argument("--candidates", nargs="*", default=CANDIDATES,
                     help="土台に1本ずつ足して床を見る構成員の略称")
     a = ap.parse_args()
     regs = ["hiroshima", "shimane"] if a.region == "both" else [a.region]

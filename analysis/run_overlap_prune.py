@@ -47,14 +47,13 @@ from analysis.run_instance_eval import SETTINGS                      # noqa: E40
 from analysis.run_overlap_eval import (OFFSETS, REGION_DIR,          # noqa: E402
                                        cos_window, grid_index, mosaic,
                                        plane_mosaic,
-                                       prep_mask, target_tiles)
+                                       prep_mask, require_fit, target_tiles)
 from dc5lib import inputs as minputs  # noqa: E402
 from dc5lib import landuse as _landuse  # noqa: E402
 from dc5lib.device import pick_device                                # noqa: E402
 from dc5lib.instance_eval import (PRIMARY, label_instances,          # noqa: E402
                                   overlap_matrix)
 from dc5lib.models import build_model_for, load_weights              # noqa: E402
-from dc5lib.paths import dataset_path                                # noqa: E402
 from dc5lib.registry import get                                      # noqa: E402
 
 STRUCT4 = ndimage.generate_binary_structure(2, 1)
@@ -63,22 +62,35 @@ QS = [0.0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5]
 
 
 @torch.no_grad()
-def infer(cond, region, device, verbose=True):
+def infer(cond, region, device, verbose=True, tiles=None):
     """タイルごとに (正解, 二値マスク, 混ぜたロジット) を返す。
 
     二値化は確率側で行う（run_overlap_eval.py と同じ）。
+
+    `tiles` は**既定の対象タイル以外を測りたいときだけ**渡す
+    （背景タイルなど）。None なら `target_tiles` と同じ ── つまり
+    **既存の呼び出しの値は変わらない。** 近傍は pkl 全体から貼るので、
+    対象を絞っても貼り方は変わらない。
+
+    **既定の対象タイルで測るときは、条件の分割が合っているかを先に見る**
+    （`require_fit`）。和集合・2段目・刈り取りは全部ここを通るので、
+    別の分割で学習した条件はここで止まる。
     """
+    if tiles is None:
+        require_fit(cond, region)
     model = build_model_for(cond).to(device)
     load_weights(model, cond.weights, device=device)
     model.eval()
 
     dirname = REGION_DIR[region]
-    pkl = dataset_path(dirname, cond.pkl_for(dirname))
+    pkl = cond.pkl_for(dirname)
     if verbose:
         print(f"  読み込み: {os.path.basename(pkl)} ...", flush=True)
     ds = load_pkl(pkl)
     gi, gj, cell = grid_index(ds)
-    tiles = target_tiles(ds, region, float(getattr(cond, "bg_ratio", 0.0) or 0.0))
+    if tiles is None:
+        tiles = target_tiles(ds, region,
+                             float(getattr(cond, "bg_ratio", 0.0) or 0.0))
     W = cos_window()
     # 土地利用以外の3入力目（建物など）。pkl の値をそのまま渡す
     t3 = minputs.third_input(cond)
@@ -322,6 +334,12 @@ def main():
                      f"（定義は inference={pp.inference}）")
 
     cond = get(args.condition)
+    # **推論の前に止める。** 学習に使った地域の、学習タイルを含む集合は
+    # 記録しない（実装書 §8。歯止めは dc5lib/evaluate.py に1つ）。
+    if args.record:
+        from dc5lib.evaluate import check_training_region_names
+        check_training_region_names([pp.base] + list(pp.union_list),
+                                    args.region)
     device = torch.device(args.device) if args.device else pick_device()
     print(f"条件 {cond.name} / 地域 {args.region} / device {device}")
     print("オーバーラップ推論（9窓・cos窓）。二値化は確率側、刈り取りはロジット")

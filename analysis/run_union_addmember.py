@@ -53,7 +53,8 @@ except Exception:
     pass
 
 from analysis.run_overlap_prune import infer, score               # noqa: E402
-from analysis.run_union_blind import blob_cov, short              # noqa: E402
+from analysis.run_union_blind import (blob_cov, guard_overwrite,  # noqa: E402
+                                      short)
 from dc5lib import paths                                         # noqa: E402
 from dc5lib.device import pick_device                             # noqa: E402
 from dc5lib.registry import get                                   # noqa: E402
@@ -119,6 +120,16 @@ def run(region, src_tag, out_tag, verify, news, device):
     dup = [short(n) for n in news if f"cov_{short(n)}" in df.columns]
     if dup:
         sys.exit(f"もう CSV に入っている構成員です: {dup}")
+
+    # **推論の前に止める**（2026-11-12 のレビュー）。
+    #   ・書き先に、別の構成員で作った表がもうある（印の使い回し）
+    #   ・足す構成員を混ぜてよいか（ensemble: false・分割の食い違い）
+    have = [c[4:] for c in df.columns
+            if c.startswith("cov_") and c != "cov_union"]
+    guard_overwrite(True, region, out_tag, have + [short(n) for n in news])
+    from dc5lib import union as _uni
+    for _w in _uni.verify_names([verify] + list(news))["warn"]:
+        print(f"  ※ {_w}")
 
     # --- 照合用の1本。**これが一致しなければ先に進まない**
     print(f"--- 照合 {short(verify)} を出し直します …", flush=True)

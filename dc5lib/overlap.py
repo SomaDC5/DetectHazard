@@ -13,7 +13,10 @@
 学習タイルの周囲を貼ると、窓は隣のタイルの半分まで入る。その隣が検証や
 テストのタイルだと、評価用の画素が学習に入る。この研究は一度テスト集合の
 汚染で結論が2つ覆っている（docs/実験のまとめ.md 8節）。
-そのため **allowed に学習集合のタイル番号だけを渡すこと**。
+そのため **allowed には「検証とテスト以外」を渡すこと**
+（`allowed_except(n_all, idx_val, idx_test)`）。背景タイルはどの分割にも
+属さないので入れてよい ── 入れると8近傍が揃うタイルが 0.2% → 8.7% に増える。
+**`allowed=None` は `OverlapDataset` が拒む**（全タイルを貼るので漏れる）。
 allowed に無い近傍は、評価時と同じく中央タイルの鏡像で埋める。
 
 使い方（ノートブックの cell 13 を差し替える）は
@@ -162,8 +165,10 @@ class OverlapDataset:
       dem/air/mask  データセット全体の配列（分割前）。添字は dataset2 の並び
       geoinfo       同上
       indices       この分割に属するタイルの添字（学習なら学習集合）
-      allowed       貼ってよい近傍の添字。**学習では indices と同じものを渡す**
-                    （None にすると全タイルを貼るので分割をまたぐ漏れが起きる）
+      allowed       貼ってよい近傍の添字。**検証とテスト以外**を渡す
+                    （`allowed_except(n_all, idx_val, idx_test)`。背景タイルは
+                    どの分割にも属さないので入れてよい）。
+                    **None は拒む** ── 全タイルを貼るので分割をまたいで漏れる
       max_shift     ずらす幅の上限 [画素]。0 で従来どおり（ずらさない）
       transform     既存の JointTransform。ずらしたあとに掛かる
       deterministic True で中央固定。検証・テスト用
@@ -188,6 +193,15 @@ class OverlapDataset:
         self.third = third
         if landuse is not None and third is not None:
             raise ValueError("landuse と third は同時に渡せません")
+        # **歯止めは渡す側ではなく受ける側に置く**（設計書 §3）。
+        # `build_loaders` の assert は `allowed_except` の結果をその入力と
+        # 比べているだけで必ず通る（レビュー 4）。本当に危ないのは
+        # `allowed=None` で、そのとき検証・テストのタイルが近傍に入る。
+        if allowed is None:
+            raise ValueError(
+                "allowed=None は渡せません。全タイルを近傍に貼るので"
+                "検証・テストの画素が学習に入ります（CLAUDE.md の 4）。"
+                " allowed_except(n_all, idx_val, idx_test) を渡してください。")
         self.idx = [int(i) for i in indices]
         self.tile = int(tile)
         self.max_shift = int(max_shift)

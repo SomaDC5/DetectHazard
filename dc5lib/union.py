@@ -16,9 +16,9 @@
 コードはそこから読む。
 
     from dc5lib import union
-    e = ensemble.get("union5")
+    e = union.get("union5")       # **2026-10-30 に ensembles/ から改名した**
     print(e.describe())
-    ensemble.verify(e)            # 混ぜてよいかを確かめる。だめなら例外
+    union.verify(e)               # 混ぜてよいかを確かめる。だめなら例外
 
 検査するもの
 ------------
@@ -147,6 +147,19 @@ def verify(e: UnionSet, strict=True) -> dict:
                              + "\n  - ".join(problems))
     return {"problems": problems, "warn": warn,
             "fingerprints": fps, "unknown": unknown, "inputs": sig}
+
+
+def verify_names(names, strict=True) -> dict:
+    """**名前の並びを直接渡して** `verify` を掛ける（先頭が基準）。
+
+    スクリプトは `--members` や `--union-with` で名前を受け取るので、
+    yaml の定義を経ずに混ぜられる。**その入口で必ず呼ぶ** ──
+    2026-11-11 のレビューで、`verify` を呼んでいるスクリプトが
+    1本も無いことが分かった（呼んでいたのは `report` と雛形だけ）。
+    """
+    names = list(names)
+    return verify(UnionSet(name="（指定された並び）", base=names[0],
+                           members=names[1:]), strict=strict)
 
 
 def record(name, members, region, scores, n_blobs, floor, csv_name,

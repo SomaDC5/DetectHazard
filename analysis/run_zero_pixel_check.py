@@ -53,7 +53,6 @@ from analysis.data import build_tileset                              # noqa: E40
 from dc5lib import inputs as minputs                                 # noqa: E402
 from dc5lib.device import pick_device                                # noqa: E402
 from dc5lib.models import build_model_for, load_weights              # noqa: E402
-from dc5lib.paths import dataset_path                                # noqa: E402
 from dc5lib.registry import get                                      # noqa: E402
 
 REGION_DIR = {"hiroshima": "Hiroshima", "shimane": "Shimane"}
@@ -75,7 +74,7 @@ BIN_NAMES = ["〜50", "50-100", "100-300", "300-1000", "1000-3000", "3000〜"]
 def masks_normal(cond, region, device, batch_size=32):
     """従来推論。(正解, 予測) をタイルごとに積んで返す。"""
     dirname = REGION_DIR[region]
-    pkl = dataset_path(dirname, cond.pkl_for(dirname))
+    pkl = cond.pkl_for(dirname)
     tiles = build_tileset(pkl, region, cond.use_airphoto,
                           bg_ratio=float(getattr(cond, "bg_ratio", 0.0) or 0.0),
                           need_landuse=minputs.needs_landuse(cond))

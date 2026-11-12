@@ -263,7 +263,7 @@ def main():
     print(f"  建物 {B.shape}  1画素 {mx:.2f} x {my:.2f} m"
           f"  倍率 {getattr(bl, 'BuildingSuper', '?')}")
 
-    src = dataset_path(dirname, cond.pkl_for(dirname))
+    src = cond.pkl_for(dirname)
     print(f"  読み込み: {src.name}（格子と対象タイルのため）…", flush=True)
     ds = load_pkl(src)
     dno = np.asarray(ds.No)

@@ -2081,7 +2081,9 @@ def load_weights(model, checkpoint_path, device="cpu"):
     """
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     state = ckpt.get("model_state_dict", ckpt) if isinstance(ckpt, dict) else ckpt
-    missing, unexpected = model.load_state_dict(state, strict=True), None
+    # `strict=True` なので足りない鍵があれば例外になる。
+    # 返りの NamedTuple は空なので受け取らない（5回目のレビュー 6）。
+    model.load_state_dict(state, strict=True)
     meta = {}
     if isinstance(ckpt, dict):
         for k in ("epoch", "best_f1_score"):

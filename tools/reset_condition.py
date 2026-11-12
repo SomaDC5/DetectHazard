@@ -8,11 +8,15 @@
     dc5-data/weights/<条件>/              重み
     dc5-data/checkpoints/<条件>/           **チェックポイント**
     results/curves/<条件>.csv              学習曲線
-    cache/analysis/tiles/<条件>__*.csv     推論の結果
-    cache/analysis/instances/<条件>__*.csv 箇所数評価の結果
+    cache/analysis/*/<条件>__*             推論・箇所評価・解析の表（**全フォルダ**）
     cache/stage2/<条件>__*.npz             2段目のかたまりデータ
+    cache/dry/<条件>/                      試運転の重みと曲線
 
 **どれか1つを忘れると、黙って混ざる。**
+
+**`results/evals/` の記録は消さない**（git に載る成果物なので）。
+残っている件数だけを出す ── 重みを作り直すと、測り直していない行は
+古い重みの値のまま残る。**2段目の重み（別の名前で保存される）も消さない。**
 
 実際に SegFormer_SAM_APM で、重みと推論キャッシュだけ消して
 **チェックポイントを残したまま**回し直したことがある。
@@ -61,17 +65,46 @@ def targets(cond_name):
     cv = Path(paths.results_dir()) / "curves" / f"{cond_name}.csv"
     if cv.exists():
         out.append(("学習曲線", cv))
+    # **cache/analysis の下は、フォルダを数え上げずに全部見る。**
+    # 以前は tiles / instances / features の3つを名指ししていたので、
+    # あとから増えた triage / building / coverage が残った
+    # （2026-11-12 のレビュー。残ると、作り直した重みの解析が
+    # 古い重みの表を読む ── 表どうしは一致するので検査を通ってしまう）。
+    # `<条件>__` で始まるものだけを拾うので、名前の前半が同じ別の条件は拾わない。
+    known = {"tiles": "推論の結果", "instances": "箇所数評価",
+             "features": "タイルの性質"}
     cache = Path(paths.cache_dir("analysis"))
-    for sub, label in (("tiles", "推論の結果"), ("instances", "箇所数評価"),
-                       ("features", "タイルの性質")):
-        d = cache / sub
-        if d.is_dir():
+    if cache.is_dir():
+        for d in sorted(x for x in cache.iterdir() if x.is_dir()):
             for p in sorted(d.glob(f"{cond_name}__*")):
-                out.append((label, p))
+                out.append((known.get(d.name, f"解析の表（{d.name}）"), p))
     s2 = Path(paths.cache_dir("stage2"))
     if s2.is_dir():
         for p in sorted(s2.glob(f"{cond_name}__*")):
             out.append(("2段目のかたまり", p))
+    dry = Path(paths.cache_dir("dry")) / cond_name
+    if dry.exists():
+        out.append(("試運転の重みと曲線", dry))
+    return out
+
+
+def stale_records(cond_name):
+    """`results/evals/` に残っている、この条件の記録。**消さない。数えるだけ。**
+
+    記録は git に載る成果物なので、この道具では触らない。ただし重みを
+    作り直すと、**測り直していない行は古い重みの値のまま残る**
+    （同じ鍵で測り直した行だけが置き換わる）。黙って混ざらないよう、
+    残っていることを見せる。
+    """
+    import json
+    out = []
+    for p in sorted(Path(paths.results_dir("evals")).glob("*.json")):
+        try:
+            if json.loads(p.read_text(encoding="utf-8")).get(
+                    "condition") == cond_name:
+                out.append(p)
+        except Exception:                                 # noqa: BLE001
+            continue
     return out
 
 
@@ -83,13 +116,21 @@ def main():
                     help="消さずに _archive 以下に退避する")
     args = ap.parse_args()
 
+    # `get` は config.yaml を開くので、無い条件では FileNotFoundError になる
+    # （KeyError だけを受けていて、しかも未定義の names() を呼んでいた）。
     try:
         cond = get(args.condition)
-    except KeyError:
+    except (KeyError, FileNotFoundError):
+        known = [c.name for c in load_all(include_excluded=True)]
         sys.exit(f"未知の条件: {args.condition}\n"
-                 f"（定義済み: {', '.join(names()[:8])} …）")
+                 f"（定義済み: {', '.join(known[:8])} …）")
 
     items = targets(cond.name)
+    recs = stale_records(cond.name)
+    if recs:
+        print(f"※ results/evals/ にこの条件の記録が {len(recs)} 件あります。"
+              "**この道具は記録を消しません。**")
+        print("   重みを作り直すと、測り直していない行は古い重みの値のまま残ります。")
     if not items:
         print(f"{cond.name}: 消すものはありません")
         return

@@ -53,7 +53,9 @@ except Exception:
 
 from dc5lib import paths
 
-BAND = 0.0198          # 島根の箇所F のゆらぎ幅
+from dc5lib.instance_eval import band                                # noqa: E402
+
+BAND = band("shimane")   # 原本は dc5lib/instance_eval.py（実装書 `5`）
 COV_GT, COV_PRED = 0.5, 0.3
 
 

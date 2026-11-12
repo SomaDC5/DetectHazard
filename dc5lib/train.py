@@ -108,15 +108,90 @@ def evaluate_pixel(model, loader, device, forward=None):
     return {"accuracy": acc, "precision": pr, "recall": rc, "f1": f1}
 
 
+def _guard_before_training(cond, cfg, loaders, wpath, curve, overwrite,
+                           hooks=None):
+    """**データを読んだあと・学習を始める前**に止める（設計書 §7）。
+
+    4つを見る。どれも「黙って違うことをする」たちの事故である。
+
+    1. **既存の重みと曲線。** `fit` は曲線を `"w"` で開いた瞬間に中身を消し、
+       `best = -1.0` から始まるので1エポック目で `best_model.pth` を
+       上書きする。方針は「既存の重みと曲線は作り直さない」（CLAUDE.md）
+       なので、既存があれば止めて `overwrite=True` で明示させる
+    2. **`augment`。** `build_loaders` は `cond.augment` を見ない。
+       `transform=` を渡さないかぎり拡張は掛からないので、
+       `augment: true` と書いたのに素のまま学習する
+    3. **`train.init_from`。** `TrainCfg.describe()` は「追加学習」と出すが、
+       `fit` は読まずゼロから学習する
+
+    4. **補助損失（深層監督）。** config の `train.loss.aux_lambda` が 0 より
+       大きい条件は、モデルに補助ヘッドが付く（`build_model_for`）。だが `fit` は
+       `model(*xs)` を呼ぶだけで `return_aux=True` を渡さず、損失も本体の出力に
+       しか掛けない。**補助ヘッドは一度も学習されず、補助損失なしの学習になる**
+       （2026-11-12 のレビュー。該当は12条件で、どれもノートブックの自前の
+       ループで学習したもの）。`hooks` に `forward` と `loss_fn` の両方が
+       あれば、呼ぶ側が補助損失を組んでいるとみなして通す
+
+    2・3・4 は**実装しないと決めた**（設計書 §8）。止めるだけである。
+    """
+    if not overwrite:
+        exist = [p for p in (wpath, curve) if Path(p).exists()]
+        if exist:
+            raise FileExistsError(
+                f"{cond.name} の " + " と ".join(Path(p).name for p in exist)
+                + " が既にあります。**学習を始めると曲線は開いた瞬間に消え、"
+                "1エポック目で重みが上書きされます。**"
+                " 作り直してよいなら fit(..., overwrite=True)"
+                "（`tools/run_training.py --overwrite`）。"
+                f"\n  {Path(wpath).parent}")
+
+    if getattr(cond, "augment", False):
+        tr = (getattr(loaders, "datasets", {}) or {}).get("train")
+        if getattr(tr, "transform", None) is None:
+            raise NotImplementedError(
+                f"{cond.name} は augment: true ですが、"
+                "`build_loaders` は `cond.augment` を見ません。"
+                "**このまま回すと拡張なしで学習します**（設計書 §8）。"
+                " 拡張を掛けるなら build_loaders(..., transform=…) を渡し、"
+                "掛けないなら config の augment を false にしてください。")
+
+    if getattr(cfg, "init_from", None):
+        raise NotImplementedError(
+            f"{cond.name} は train.init_from={cfg.init_from!r} ですが、"
+            "`fit` は追加学習を実装していません。"
+            "**describe() は「追加学習」と出るのにゼロから学習します**"
+            "（設計書 §8）。ノートブック側で重みを読み込んでから"
+            " hooks={'model': …} で渡してください。")
+
+    from .losses import aux_lambda
+    lam = aux_lambda(cond)
+    h = hooks or {}
+    if lam > 0 and not (h.get("forward") and h.get("loss_fn")):
+        raise NotImplementedError(
+            f"{cond.name} は train.loss.aux_lambda={lam} ですが、"
+            "`fit` は補助損失（深層監督）を計算しません。"
+            "**このまま回すと補助ヘッドは学習されず、補助損失なしの学習になります**"
+            "（設計書 §8）。hooks に forward（`model(*xs, return_aux=True)`）と"
+            " loss_fn（本体＋λ×補助）の両方を渡すか、補助損失を使わないなら"
+            " config の aux_lambda を 0 にしてください。")
+
+
 def fit(cond, loaders, device=None, hooks=None, epochs=None,
-        weights=None, curve=None, verbose=True) -> History:
+        weights=None, curve=None, verbose=True, overwrite=False) -> History:
     """`epochs` / `weights` / `curve` は試運転のための差し替え。
 
     **既定では本物の場所に書く。** 試運転で本物の重みを上書きしないよう、
     短く回すときは必ず `weights=` と `curve=` を別の場所にする。
+
+    `overwrite=False` のまま既存の重みか曲線があると、
+    **学習を始めずに `FileExistsError` で止まる**（`_guard_before_training`）。
     """
     cfg = train_cfg(cond)
+    curve = Path(curve) if curve else paths.curve_path(cond.name)
+    wpath = Path(weights) if weights else cond.weights
     hooks = dict(hooks or {})
+    _guard_before_training(cond, cfg, loaders, wpath, curve, overwrite,
+                           hooks=hooks)
     device = torch.device(device or ("cuda" if torch.cuda.is_available()
                                      else "cpu"))
     from .models import build_model_for
@@ -135,8 +210,6 @@ def fit(cond, loaders, device=None, hooks=None, epochs=None,
     loss_fn = hooks.get("loss_fn") or (lambda out, y: criterion(
         out[0] if isinstance(out, (tuple, list)) else out, y))
 
-    curve = Path(curve) if curve else paths.curve_path(cond.name)
-    wpath = Path(weights) if weights else cond.weights
     n_epochs = int(epochs or cfg.epochs)
     curve.parent.mkdir(parents=True, exist_ok=True)
     hist = History(curve=str(curve), weights=str(wpath))

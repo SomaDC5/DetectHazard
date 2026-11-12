@@ -375,6 +375,124 @@ def _check_overlap_names():
     return out
 
 
+def split_declaration(cond):
+    """config の `split:` が条件の実態に合っているか。**判定はここだけ。**
+
+    返りは `(種別, 文)`。種別は
+
+    | 種別 | 意味 |
+    |---|---|
+    | `None` | 問題なし |
+    | `"undeclared"` | csv 分割なのに `split:` が無い。**直せる。検査で止める** |
+    | `"cannot_declare"` | 宣言できない条件。**既知として黙らせる** |
+
+    `tools/audit_splits.py` と `_check_declared_split` が**別々に判定していて
+    食い違っていた**（2026-11-10 の再レビュー 4）── audit 側は
+    `testselect` も対象にしていたので、`Train_Hiroshima_Test_Shimane_SAM_APM`
+    に**消せない警告**が毎回出ていた。**消せない警告は読み飛ばされる。**
+    """
+    pr = str(getattr(cond, "protocol", "") or "")
+    kind = str((getattr(cond, "split", None) or {}).get("kind") or "")
+    if "BlockSplit" in cond.name or "blocksplit" in pr:
+        if kind != "csv":
+            return ("undeclared",
+                    f"ブロック分割の条件ですが config の split.kind が "
+                    f"{kind or '空'} です。このままだと splits.resolve が"
+                    "乱数に落ちて、学習時と違う分割になります"
+                    "（split: {kind: csv, file: …} を書いてください）")
+        return (None, "")
+    if "testselect" in pr:
+        # 検証を取らない 8:2。`resolve` は val_size=0 を扱えないので宣言できない。
+        # **テストは一致する**（test_size / random_state が同じなので
+        # train_test_split の1段目が同じ）ので評価は正しく、架空なのは val だけ。
+        return ("cannot_declare",
+                "検証を取らない 8:2 なので split: に書けない（実装書 2）。"
+                "テストは既定の分割と一致するので評価は正しい")
+    if kind == "csv":
+        # **宣言は済んでいる。問題は名前のほうである**（再々レビュー 6）。
+        # `undeclared` と同じ札にすると、将来 csv 分割を足したときに
+        # 「宣言し忘れた」と誤解される。
+        return ("misnamed",
+                "config に split.kind=csv があるのに名前も protocol も"
+                "ブロック分割と名乗っていません（宣言は済んでいます）")
+    return (None, "")
+
+
+def _check_declared_split():
+    """**csv 分割の条件は config に `split:` を書いているか。**
+
+    `splits.resolve` は `split:` が空なら**黙って `random` に落ちる**。
+    だから書き忘れると `build_loaders` が**学習時と違う分割**を作る。
+
+    2026-11-08 に実際に踏んだ ── `FinalFusion_SAM_APM_BlockSplit` は
+    protocol が `v1-blocksplit` なのに `split:` が無く、
+    `audit_splits` に分割の指紋を出すまで**出発点と同じ分割に見えていた。**
+    いまの乱数テスト（正解ありの 2,963枚）のうち **2,158枚（72.8%）**が
+    この条件の学習か検証に入っており、**潜在的なデータリーク**だった。
+
+    `_check_overlap_names` と同じたちの事故である（名乗っているものが
+    config に届いていない）。**csv で表せるものだけを見る** ──
+    `Train_Hiroshima_Test_Shimane_SAM_APM` は検証を取らない 8:2 で、
+    `resolve` は `val_size=0` を扱えないので宣言できない（実装書 `2`）。
+    """
+    out = []
+    for c in load_all(include_excluded=True):
+        kind, msg = split_declaration(c)
+        if kind in ("undeclared", "misnamed"):
+            out.append(f"{c.name}: {msg}")
+    return out
+
+
+# `train:` に書いてよい鍵。**ここに無い鍵は誰も読まない。**
+#   読まれるもの … `traincfg.DEFAULTS` の鍵と `loss`（`dc5lib/losses.py`）
+#   記述だけのもの … 当時の手順を文章で残した3つ。**値を変えても何も起きない**
+_TRAIN_NOTES = ("augment_params", "model_selection", "split")
+
+
+def _check_train_keys():
+    """**config の `train:` に、誰も読まない鍵が書かれていないか。**
+
+    `traincfg.train_cfg` は `DEFAULTS` にある鍵だけを拾い、**それ以外を
+    黙って捨てる。** だから `batchsize: 16` と打ち間違えると既定の 32 で
+    学習が走り、config を読んだ人は 16 で回ったと思う
+    （設計書 §1 の「書いてあるから効いている、が嘘になる」と同じ形）。
+    2026-11-11 のレビューで、全条件の `train:` の鍵を数えて確かめた。
+    """
+    from .traincfg import DEFAULTS
+    ok = set(DEFAULTS) | {"loss"} | set(_TRAIN_NOTES)
+    # `train.loss` の中も同じ。`build_loss` は損失の種類ごとに決まった鍵だけを
+    # 拾うので、`alhpa: 0.8` と打ち間違えると既定の 0.7 で学習する。
+    # **torch が無い環境でも検査は回す**（`_model_class_names` と同じ理由）ので、
+    # 損失の表が読めなければ `loss` の中は見ない。
+    try:
+        from . import losses as _losses
+    except Exception:                                     # noqa: BLE001
+        _losses = None
+    out = []
+    for c in load_all(include_excluded=True):
+        extra = sorted(set(c.train or {}) - ok)
+        if extra:
+            out.append(
+                f"{c.name}: config の train: に誰も読まない鍵があります "
+                f"{extra}。打ち間違いなら直し、新しい項目なら先に "
+                "dc5lib/traincfg.py の DEFAULTS に足してください")
+        spec = dict((c.train or {}).get("loss") or {})
+        if _losses is not None and spec:
+            kind = spec.get("type", "focal_tversky")
+            # `clamp` を読むのは FocalTversky の2種だけ（箇所正規化の損失は
+            # ±10 で固定。`dc5lib/instance_loss.py`）
+            known = (set(_losses.DEFAULTS.get(kind, {}))
+                     | set(_losses.AUX_KEYS) | {"type"}
+                     | ({"clamp"} if kind.startswith("focal_tversky") else set()))
+            extra = sorted(set(spec) - known)
+            if kind in _losses.DEFAULTS and extra:
+                out.append(
+                    f"{c.name}: config の train.loss に、損失 {kind} が"
+                    f"読まない鍵があります {extra}"
+                    "（dc5lib/losses.py の DEFAULTS を参照）")
+    return out
+
+
 def _check_labels():
     """図表に出す表示ラベルが重複していないか。
 
@@ -393,7 +511,8 @@ def _check_labels():
 def check():
     """CI / コミット前に回す検査。異常があれば行を返す。"""
     problems = (_check_unicode_paths() + _check_labels()
-                + _check_overlap_names())
+                + _check_overlap_names() + _check_declared_split()
+                + _check_train_keys())
     names = [p.name for p in sorted(paths.experiments_dir().iterdir()) if p.is_dir()]
 
     # exFAT と Windows は大文字小文字を区別しないが、Ubuntu の ext4 は区別する。

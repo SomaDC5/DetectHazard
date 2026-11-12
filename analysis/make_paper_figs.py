@@ -188,11 +188,10 @@ def fig_output(out: Path, name="Ens_AllStrong14", region="shimane", size=1400):
 def fig_inputs(out: Path, condition="FinalFusion_SAM_APM", n=3):
     """入力データの例。**pkl を読むので学習中は避ける。**"""
     from analysis.data import load_pkl, preprocess_mask
-    from dc5lib.paths import dataset_path
     from dc5lib.registry import get
 
     cond = get(condition)
-    p = dataset_path("Hiroshima", cond.pkl_for("Hiroshima"))
+    p = cond.pkl_for("Hiroshima")
     print(f"  読み込み: {p.name}（{p.stat().st_size / 2**30:.1f} GB）…", flush=True)
     ds = load_pkl(p)
     # 正解が程よく入っているタイルを選ぶ

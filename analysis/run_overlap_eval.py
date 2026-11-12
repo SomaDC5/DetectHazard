@@ -28,9 +28,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dc5lib import inputs as minputs  # noqa: E402
 from dc5lib import landuse as _landuse  # noqa: E402
 from dc5lib import results as dc5results                      # noqa: E402
+from dc5lib import splits as _splits                          # noqa: E402
+from dc5lib.evaluate import (check_training_region,           # noqa: E402
+                             check_training_region_names)
 from dc5lib.instance_eval import PRIMARY, InstanceEvaluator    # noqa: E402
 from dc5lib.models import build_model_for, load_weights            # noqa: E402
-from dc5lib.paths import dataset_path                          # noqa: E402
 from dc5lib.registry import get                                # noqa: E402
 from analysis.data import load_pkl                             # noqa: E402
 
@@ -169,14 +171,28 @@ def prep_mask(ds, k):
     return gaussian_filter(m, sigma=1) > 0
 
 
+def require_fit(cond, region):
+    """**その条件をその地域のタイルで測ってよいか。推論の前に止める。**
+
+    広島の対象タイル（`target_tiles`）は**いつも乱数分割のテスト**である。
+    別の分割で学習した条件をそこで測ると、テストに学習タイルが入る
+    （`dc5lib/splits.py` の `fits_subset`。2026-11-11 のレビュー）。
+    """
+    if region == "hiroshima":
+        ok, why = _splits.fits_subset(cond, "holdout")
+        if not ok:
+            raise ValueError(why)
+
+
 @torch.no_grad()
 def evaluate(cond, region, device, verbose=True):
+    require_fit(cond, region)
     model = build_model_for(cond).to(device)
     meta = load_weights(model, cond.weights, device=device)
     model.eval()
 
     dirname = REGION_DIR[region]
-    pkl = dataset_path(dirname, cond.pkl_for(dirname))
+    pkl = cond.pkl_for(dirname)
     if verbose:
         print(f"  読み込み: {os.path.basename(pkl)} ...", flush=True)
     ds = load_pkl(pkl)
@@ -248,6 +264,11 @@ def main():
         cond = get(name)
         for region in regions:
             print(f"\n[{region}] {name}", flush=True)
+            # **推論の前に止める**（設計書 §7）。下の `check_training_region` は
+            # 推論のあとなので、島根 24,569枚を回し終えてから怒っていた
+            # （2026-11-11 のレビュー）。枚数は `regions.yaml` から先に分かる。
+            if args.record:
+                check_training_region_names([cond], region)
             acc, evs, n_tiles, meta = evaluate(cond, region, args.device)
             print(f"  {'規則':<14}{'面積R':>8}{'面積P':>8}{'面積F':>8}  "
                   f"{'箇所R':>8}{'箇所P':>8}{'箇所F':>8}")
@@ -264,6 +285,11 @@ def main():
                     continue      # 従来の値は run_inference.py 側が記録済み
                 tileset = dc5results.tileset_label(
                     region, float(getattr(cond, "bg_ratio", 0.0) or 0.0))
+                # **学習に使った地域で、学習タイルを含む集合を記録しない**
+                # （実装書 §8。歯止めは dc5lib/evaluate.py に1つ）。
+                # 島根の主系統は全24,569枚なので学習タイルを含む。
+                # 広島は test ホールドアウトなので該当しない。
+                check_training_region(cond, region, n_tiles)
                 dc5results.record_eval(
                     run_id=run_id, condition=name, region=region, tileset=tileset,
                     scope="オーバーラップ", metric_kind="面積",

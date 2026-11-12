@@ -7,6 +7,7 @@
   - metrics.csv が evals/ と食い違っていないか
   - ensembles.yaml のメンバーが実在し、bg_ratio が揃っているか
   - 学習ノートブックが config.yaml を無視して直書きしていないか
+  - ゆらぎ幅（帯）の写しが増えていないか（tools/check_bands.py）
 """
 import json, re, subprocess, sys
 from pathlib import Path
@@ -99,7 +100,6 @@ def _missing_imports(src):
     return out
 
 
-_TRAINED = {p.parent.name for p in (paths.results_dir() / "curves").glob("*.csv")}
 for d in sorted(Path(paths.experiments_dir()).iterdir()):
     nb = d / "Keisya_airPhoto_final6.ipynb"
     if not nb.exists() or (paths.results_dir() / "curves" / f"{d.name}.csv").exists():
@@ -223,6 +223,66 @@ except ImportError:
     pass
 
 # ----------------------------------------------------------------------
+# 雛形（templates/*.ipynb）が、定義していない名前を使っていないか
+#
+# **雛形は誰も実行しないまま複製される。** `templates/union.ipynb` は
+# 2026-10-30 の改名（`dc5lib/ensemble.py` → `union.py`）のあとも
+# `ensemble.get(...)` と呼んでいて、**最初のセルで NameError になっていた**
+# （2026-11-11 のレビュー）。import は `from dc5lib import union` に
+# 直してあったので、nbformat の検査も import の検査も通っていた。
+# セルを上から順につなぎ、**どこでも束縛されていない名前の読み出し**を探す。
+# ----------------------------------------------------------------------
+def _undefined_names(src):
+    import ast
+    import builtins
+    tree = ast.parse(src)
+    bound = set(dir(builtins)) | {"__file__", "__name__", "get_ipython"}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for a in node.names:
+                bound.add((a.asname or a.name).split(".")[0])
+        elif isinstance(node, (ast.FunctionDef, ast.ClassDef,
+                               ast.AsyncFunctionDef)):
+            bound.add(node.name)
+            if not isinstance(node, ast.ClassDef):
+                for a in (node.args.args + node.args.kwonlyargs
+                          + node.args.posonlyargs):
+                    bound.add(a.arg)
+                for a in (node.args.vararg, node.args.kwarg):
+                    if a is not None:
+                        bound.add(a.arg)
+        elif isinstance(node, ast.Lambda):
+            for a in (node.args.args + node.args.kwonlyargs
+                      + node.args.posonlyargs):
+                bound.add(a.arg)
+            for a in (node.args.vararg, node.args.kwarg):
+                if a is not None:               # `lambda *a: ...` の a
+                    bound.add(a.arg)
+        elif isinstance(node, ast.Name) and isinstance(
+                node.ctx, (ast.Store, ast.Del)):
+            bound.add(node.id)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bound.add(node.name)
+    return sorted({n.id for n in ast.walk(tree)
+                   if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+                   and n.id not in bound})
+
+
+for _nb in sorted(paths.REPO_ROOT.glob("templates/*.ipynb")):
+    try:
+        _cells = json.loads(_nb.read_text(encoding="utf-8"))["cells"]
+        _src = "\n".join(
+            "\n".join(ln for ln in "".join(c["source"]).splitlines()
+                      if not ln.lstrip().startswith(("%", "!")))
+            for c in _cells if c.get("cell_type") == "code")
+        for _n in _undefined_names(_src):
+            problems.append(
+                f"templates/{_nb.name}: 定義していない名前 `{_n}` を使っています"
+                "（上から順に実行すると NameError）")
+    except Exception as _e:                               # noqa: BLE001
+        problems.append(f"templates/{_nb.name} の名前の検査ができませんでした: {_e}")
+
+# ----------------------------------------------------------------------
 # config が実装に届いているか（`tools/audit_wiring.py` を呼ぶ）
 #
 # **「直書きの値が config と違う」は0件でなければならない。**
@@ -291,6 +351,25 @@ try:
                 "（python tools/verify_docs.py で詳細）")
 except Exception as _e:                                   # noqa: BLE001
     problems.append(f"実装書の照合ができませんでした: {_e}")
+
+# ゆらぎ幅（帯）の写しが増えていないか（`tools/check_bands.py`）。
+# **値が正しくても、測り直したときに古い帯のまま判定が反転する。**
+# 既知のぶんは許し、増えたときだけ落ちる（実装書 `5`）。
+try:
+    from tools import check_bands as _cb
+    problems += _cb.scan(paths.REPO_ROOT)
+except Exception as _e:                                   # noqa: BLE001
+    problems.append(f"帯の直書きの検査ができませんでした: {_e}")
+
+# 歯止めが本当に止まるか（`tools/test_guards.py`）。
+# **設計書 7 が「止める」と書いているのに通る箇所が2つあった**
+# （2026-11-08 のレビュー）。文書と実装の食い違いは機械で見る。
+try:
+    from tools import test_guards as _tg
+    for _p in _tg.run():
+        problems.append(f"歯止めが効いていません: {_p}")
+except Exception as _e:                                   # noqa: BLE001
+    problems.append(f"歯止めの検査ができませんでした: {_e}")
 
 if problems:
     print("検査で問題が見つかりました:")

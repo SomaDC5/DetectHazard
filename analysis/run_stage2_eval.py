@@ -41,7 +41,6 @@ from dc5lib import paths, stage2                                        # noqa: 
 from dc5lib.device import pick_device                                   # noqa: E402
 from dc5lib.instance_eval import label_instances                        # noqa: E402
 from dc5lib.models import build_model_for, load_weights                 # noqa: E402
-from dc5lib.paths import dataset_path                                   # noqa: E402
 from dc5lib.registry import get                                         # noqa: E402
 
 THRS = [0.0, 0.2, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.7]
@@ -73,7 +72,7 @@ def run(stage1, model2, split, device, region="hiroshima", wide_ch=0,
             "この経路は土地利用以外の3入力目に未対応です。"
             "和集合の相方としてなら --union-with で使えます")
     u_packs = [union_logits(c2, split, device, region=region) for c2 in u_list]
-    pkl = dataset_path(dirname, stage1.pkl_for(dirname))
+    pkl = stage1.pkl_for(dirname)
     print(f"  読み込み: {pkl.name}")
     ds = load_pkl(pkl)
     if region == "shimane":
@@ -176,6 +175,41 @@ def prune(PB, drop):
     return out
 
 
+def guard_record_split(record, split):
+    """**記録するのはテストだけ**（設計書 §6）。推論の前に呼ぶ。
+
+    記録の鍵に split が入らないので、`--split val --record` は
+    その定義のテストの行を**検証の値で置き換える**。`dc5lib/evaluate.py` には
+    同じ歯止めがあったが、こちらには無かった（2026-11-12 のレビュー）。
+    """
+    if record and split != "test":
+        raise ValueError(
+            f"--split {split} の値は記録できません。記録の鍵は "
+            "(condition, region, tileset, scope, metric_kind, setting) で "
+            "**split が入らない**ため、テストの行を置き換えてしまいます"
+            "（設計書 §6）。しきい値を選ぶだけなら --record を外してください。")
+
+
+def guard_stage2_weights(ck, stage1, union_names):
+    """**2段目の重みが、いま渡している1段目・相方で学習したものか。**
+
+    2段目は1段目の出力（ロジットとかたまり）を入力にするので、
+    別の1段目に当てても落ちずに**意味の無い値**が出る。
+    重みに書いてあるものだけを比べる ── 書いていなければ「分からない」ので
+    止めない（設計書 §7 の作法）。`union` は 2026-11-12 から保存している。
+    """
+    want = ck.get("stage1")
+    if want and want != stage1:
+        raise ValueError(
+            f"この2段目の重みは 1段目 {want} で学習したものです"
+            f"（いまの指定は {stage1}）。")
+    if "union" in ck and sorted(ck["union"] or []) != sorted(union_names or []):
+        raise ValueError(
+            "この2段目の重みが学習したときの和集合の相方と、いまの指定が違います。"
+            + chr(10) + f"  学習時 {sorted(ck['union'] or [])}"
+            + chr(10) + f"  指定   {sorted(union_names or [])}")
+
+
 def u_list_names_differ(pp, given):
     """定義と指定が食い違っていないか。指定が無ければ食い違いではない。
 
@@ -208,6 +242,12 @@ def main():
     ap.add_argument("--device", default=None)
     args = ap.parse_args()
 
+    # **推論の前に止める。** 記録するのはテストだけ（設計書 §6）
+    try:
+        guard_record_split(args.record, args.split)
+    except ValueError as e:
+        sys.exit(str(e))
+
     pp = None
     if args.postprocess:
         from dc5lib import postprocess as pp_mod
@@ -239,10 +279,32 @@ def main():
     device = torch.device(args.device) if args.device else pick_device()
     stage1 = get(args.stage1)
     u_list_names = args.union_with or []
+    # **推論の前に止める**（設計書 §7。2026-11-11 のレビュー）。
+    #   ・混ぜてよいか（ensemble: false・分割の食い違い）。`union.verify` を
+    #     呼んでいるスクリプトが1本も無かった
+    #   ・学習に使った地域の、学習タイルを含む集合を記録しない
+    if u_list_names:
+        from dc5lib import union as _uni
+        for _w in _uni.verify_names([args.stage1] + list(u_list_names))["warn"]:
+            print(f"  ※ {_w}")
+    #   ・その条件をその地域のタイルで測ってよいか（別の分割で学習した
+    #     条件を乱数テストで測らない）
+    from analysis.run_overlap_eval import require_fit
+    for _n in [args.stage1] + list(u_list_names):
+        require_fit(get(_n), args.region)
+    if args.record:
+        from dc5lib.evaluate import check_training_region_names
+        check_training_region_names([args.stage1] + list(u_list_names),
+                                    args.region)
     w = paths.weights_path(args.model)
     if not w.exists():
         sys.exit(f"{w} がありません。run_stage2_train.py で学習してください")
     ck = torch.load(w, map_location=device)
+    # 別の1段目・別の相方で学習した2段目を当てない（落ちずに無意味な値が出る）
+    try:
+        guard_stage2_weights(ck, args.stage1, list(u_list_names))
+    except ValueError as e:
+        sys.exit(str(e))
     wide_ch = int(ck.get("wide_ch", 0))
     use_lu = bool(ck.get("landuse", False))
     if wide_ch:

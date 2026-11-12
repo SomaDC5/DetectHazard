@@ -34,7 +34,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from analysis.data import load_pkl                                  # noqa: E402
 from dc5lib import landuse                                          # noqa: E402
-from dc5lib.paths import dataset_path                                # noqa: E402
 from dc5lib.registry import get                                     # noqa: E402
 
 NAMES = {c: landuse.LANDUSE_CLASSES.get(c, c) for c in landuse.CHANNEL_ORDER}
@@ -56,7 +55,7 @@ def main():
 
     cond = get(args.condition)
     for region in args.regions:
-        ds = load_pkl(dataset_path(region, cond.pkl_for(region)))
+        ds = load_pkl(cond.pkl_for(region))
         n = len(ds.No)
         has_gt = np.array([np.max(np.asarray(ds.Mask[k])) >= 1 for k in range(n)])
         print(f"\n=== {region}: {n:,} タイル"

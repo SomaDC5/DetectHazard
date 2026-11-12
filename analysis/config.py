@@ -109,9 +109,34 @@ def group_by_pkl(conditions, region):
     bg_ratio が違うとテスト集合が変わる（analysis/data.py の
     hiroshima_test_indices を参照）ので、まとめてはいけない。
     キーは (pklのパス, bg_ratio)。
+
+    **その地域のタイル集合で測ってはいけない条件は、ここで外す**
+    （`dc5lib/splits.py` の `fits_subset`）。広島の `holdout` は乱数分割の
+    テストなので、ブロック分割で学習した条件を通すと学習タイルで測る
+    ことになる。逆（乱数分割の条件を `blocktest` で測る）も同じ。
+    黙って外さず、**何を外したかを出す。**
     """
+    from dc5lib import inputs as _inputs
+    from dc5lib import splits as _splits
+    subset = REGION_SUBSET.get(region, "")
     groups = {}
     for c in conditions:
+        ok, why = _splits.fits_subset(c, subset)
+        if not ok:
+            print(f"  **測らない** {why}", flush=True)
+            continue
+        # **この道（素のタイルの集計）は、土地利用以外の3入力目を渡さない。**
+        # `infer.run_condition` と `run_instance_eval.run_condition` は
+        # `model_args(..., third=…)` を付けていないので、建物や地質の条件は
+        # pkl を読んだあとで `ValueError` になり、**残りの条件も道連れで止まる**
+        # （既定は全条件。2026-11-12 のレビュー）。先に外して、外したと言う。
+        t3 = _inputs.third_input(c)
+        if t3 is not None:
+            print(f"  **測らない** {c.name} は3入力目（{t3.source} / pkl の "
+                  f"{t3.field}）を要りますが、この道は未対応です。"
+                  "素のタイルの値は tools/run_eval.py、オーバーラップ推論は "
+                  "run_overlap_prune.py で測れます", flush=True)
+            continue
         groups.setdefault((c.pkl(region), float(getattr(c, "bg_ratio", 0.0) or 0.0)),
                           []).append(c)
     return groups

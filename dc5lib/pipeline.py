@@ -39,12 +39,15 @@
   **背景タイルは学習・検証・テストのどこにも属さない**（`bg_ratio=0`）ので、
   近傍として使っても漏れにはならない。
 - **漏れるのは検証・テストのタイルを近傍にしたときだけ。** だから
-  `allowed_except(len(ctx), 検証, テスト)` でその2つだけを外し、
-  **外れていることを assert で確かめている。** `allowed=None` は使わない
-  （全タイルを貼るので検証・テストが入る）。
+  `allowed_except(len(ctx), 検証, テスト)` でその2つだけを外す。
+  `allowed=None` は使わない（全タイルを貼るので検証・テストが入る。
+  **`OverlapDataset` が拒む** ── 歯止めはそちらにある。ここの assert は
+  `allowed_except` の結果をその入力と比べているだけで必ず通る）。
 - ずらす幅は最大64px＝タイルの半分なので、**窓は隣のタイルの半分までしか
   入らない。** その隣が背景なら問題なく、検証・テストなら漏れる。
-  上の assert がそこを止めている。
+- `datasets["all"]` は警戒区域ありの全件を**素のタイル**で返す
+  （島根の補助 `gtonly` を測るため）。**`datasets["train"]` は
+  オーバーラップ条件ではずらした窓を返す**ので、評価に使わない。
 - メモリ。航空写真と3入力目は **uint8 のまま持つ**。float32 で全件持つと
   島根で数GBになる。`/255` は `OverlapDataset.__getitem__` がやる。
 - `bg_ratio > 0` は**まだ通していない**。`NotImplementedError` を投げる。
@@ -139,6 +142,14 @@ def build_loaders(cond, region="Hiroshima", batch_size=None, transform=None,
             f"{cond.name} は bg_ratio={bg} です。背景タイルの混ぜ方は"
             "まだ pipeline に入れていません（実データで再現を確かめてから入れる）。"
             "docs/ノートブックの作り方.md の「まだ通っていない道」を参照。")
+    # **pkl を読む前に止める。** `OverlapDataset` は航空写真を必ず読むので、
+    # 1入力の条件は最初のバッチで `TypeError` になる（数GB読んだあとで）。
+    if len(cond.inputs) < 2:
+        raise NotImplementedError(
+            f"{cond.name} は入力が {len(cond.inputs)} 本です。"
+            "`build_loaders` は2入力以上（地形＋航空写真）だけを通します。"
+            "1入力の条件は旧プロトコルのノートブックで学習したもので、"
+            "ここからは測れません（設計書 §8）。")
 
     path = cond.pkl_for(region)
     if verbose:
@@ -182,11 +193,17 @@ def build_loaders(cond, region="Hiroshima", batch_size=None, transform=None,
     # --- 近傍は**背景も含む全タイル**から貼る。外すのは検証とテストだけ。
     # 背景タイルは学習・検証・テストのどこにも属さないので漏れにならない。
     allowed = allowed_except(n_all, idx["val"], idx["test"])
+    # **この検査は `allowed_except` の実装を見ているだけである。**
+    # 渡した holdout をそのまま引き算した結果と比べているので、
+    # `allowed_except` が壊れていないかぎり必ず通る（レビュー 4）。
+    # 本当の歯止めは `OverlapDataset` 側の `allowed=None` の拒否で、
+    # そちらが「分割をまたぐ漏れ」を止めている（設計書 §3）。
     hold = {int(i) for i in idx["val"]} | {int(i) for i in idx["test"]}
     bad = set(int(a) for a in allowed) & hold
     if bad:
         raise AssertionError(
-            f"検証かテストのタイルが近傍に混入しています（{len(bad)} 枚）")
+            f"検証かテストのタイルが近傍に混入しています（{len(bad)} 枚）"
+            "── allowed_except が壊れています")
     # 学習の添字が ctx の前半（警戒区域ありの範囲）に収まっているか
     if idx["train"].size and int(idx["train"].max()) >= len(keep):
         raise AssertionError("学習の添字が背景タイルの範囲に入っています")
@@ -206,6 +223,14 @@ def build_loaders(cond, region="Hiroshima", batch_size=None, transform=None,
     dtr = make("train", False)
     dva = make("val", True)
     dte = make("test", True)
+    # **警戒区域ありの全件を、素のタイルで。** 島根の補助（`gtonly` 9,679枚）を
+    # 測るためのもの。`datasets["train"]` をつないで代わりにしてはいけない ──
+    # オーバーラップ条件の学習用は**ずらした窓**を返すので、素のタイルの
+    # 評価にならない（2026-11-11 のレビュー。設計書 §6）。
+    dall = OverlapDataset(
+        dem, air, mask, geo, indices=np.arange(len(keep)), allowed=allowed,
+        max_shift=0, transform=None, deterministic=True, seed=ov_seed,
+        landuse=lu, third=third)
 
     tr = idx["train"]
     fields = {}
@@ -230,7 +255,7 @@ def build_loaders(cond, region="Hiroshima", batch_size=None, transform=None,
         n_bg=len(bgs), n_allowed=len(allowed),
         overlap=({"max_shift": max_shift, "seed": ov_seed,
                   "cov": cov, "mean": mean} if max_shift > 0 else {}),
-        datasets={"train": dtr, "val": dva, "test": dte},
+        datasets={"train": dtr, "val": dva, "test": dte, "all": dall},
     )
     if verbose:
         print(ld.describe())

@@ -262,6 +262,19 @@ TEMPLATE = {
 }
 
 
+def condition_templates(tpl: Path):
+    """`templates/` のうち、**条件ごとに複製する雛形**（`__CONDITION__` を持つもの）。
+
+    `templates/union.ipynb` は和集合の雛形で、条件には属さない。以前は
+    `templates/*.ipynb` を全部複製していたので、新しい条件を作るたびに
+    `union.ipynb` が混ざった（2026-11-12 のレビュー。`audit_wiring` は
+    条件のノートブックを `train.ipynb` と `eval_shimane.ipynb` の2本と
+    決めているので、3本あると「ノートブックが 3 個」と出る）。
+    """
+    return [nb for nb in sorted(Path(tpl).glob("*.ipynb"))
+            if "__CONDITION__" in nb.read_text(encoding="utf-8")]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("name", nargs="?", help="新しい条件名")
@@ -447,14 +460,12 @@ def main():
         # 旧世代のノートブックをコピーして増やすのをやめるため、
         # これが既定の道である（docs/ノートブックの作り方.md）。
         tpl = paths.REPO_ROOT / "templates"
-        nbs = sorted(tpl.glob("*.ipynb"))
+        nbs = condition_templates(tpl)
         if not nbs:
             print(f"  ! 雛形が見つかりません: {tpl}")
         for nb in nbs:
             dst = d / nb.name
             t = nb.read_text(encoding="utf-8")
-            if "__CONDITION__" not in t:
-                print(f"  ! {nb.name} に __CONDITION__ がありません（差し替えなし）")
             t = t.replace("__CONDITION__", a.name)
             dst.write_text(t, encoding="utf-8")
             print(f"  作成: experiments/{a.name}/{nb.name}（雛形から。"
@@ -503,9 +514,18 @@ def main():
   3. ノートブックを編集して学習
        重みは自動的に dc5-data/weights/{a.name}/ に保存されます
 """)
-    if not a.base:
-        print("  ※ --from <既存の条件> を付けると、config とノートブックを"
-              "複製して始められます。")
+    # **`--from` を勧めない。** 既存のノートブックをコピーして条件を増やすのは
+    # CLAUDE.md の 7 で禁じてある（55本のうち30本で config が届かなくなった原因）。
+    # 以前はここで `--from` を案内していた（2026-11-12 のレビュー）。
+    if a.base:
+        print(f"  ※ --from {a.base} で**既存のノートブックを複製しました。**"
+              "CLAUDE.md の 7（既存のノートブックをコピーして条件を増やさない）に"
+              "当たります。")
+        print("     config だけ引き継ぎたいときは、--from を付けずに作ってから "
+              "config.yaml を写してください。")
+    else:
+        print("  ※ ノートブックは templates/ の雛形から作りました"
+              "（docs/ノートブックの作り方.md）。")
 
 
 if __name__ == "__main__":
