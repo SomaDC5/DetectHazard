@@ -129,11 +129,12 @@ DetectHazard/
 作業するので、名前を決めるこの瞬間に確認しておくのがいちばん安い。
 
 ```bash
-python tools/new_experiment.py MyNewModel_SAM_APM --from FinalFusion_SAM_APM
+python tools/new_experiment.py MyNewModel_SAM_APM --note "何を試すか"
 ```
 
 ローカルにも他のリモートブランチにも同名が無いかを調べ、config.yaml と
-ノートブックの雛形を作る。そのあと **config.yaml だけ先に push して名前を予約**
+ノートブックの雛形を作る（`templates/` から。**`--from` は既存のノートブックを
+複製するので付けない** ── 2026-11-12 に例を直した）。そのあと **config.yaml だけ先に push して名前を予約**
 してから学習を始める（手順は `docs/使い方.md`）。
 
 新しいモデルクラスを使うなら `dc5lib/models.py` に追加して `MODEL_CLASSES` に登録する。
