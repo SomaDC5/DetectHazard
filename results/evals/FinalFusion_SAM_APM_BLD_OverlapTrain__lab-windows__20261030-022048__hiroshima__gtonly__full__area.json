@@ -1,0 +1,17 @@
+{
+ "condition": "FinalFusion_SAM_APM_BLD_OverlapTrain",
+ "eval_id": "FinalFusion_SAM_APM_BLD_OverlapTrain__lab-windows__20261030-022048__hiroshima__gtonly__full__area",
+ "evaluated_at": "2026-10-30T02:20:48",
+ "f1": 0.713063,
+ "machine": "lab-windows",
+ "metric_kind": "面積",
+ "n_tiles": 2964,
+ "note": "dc5lib.evaluate.evaluate。**素のタイル**（オーバーラップ推論ではない） / test 2,964 枚",
+ "precision": 0.675457,
+ "recall": 0.755104,
+ "region": "hiroshima",
+ "run_id": "FinalFusion_SAM_APM_BLD_OverlapTrain__lab-windows__20261030-022048",
+ "scope": "通常",
+ "setting": "",
+ "tileset": "警戒のみ"
+}

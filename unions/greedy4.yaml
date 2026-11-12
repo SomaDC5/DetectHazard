@@ -1,0 +1,8 @@
+name: greedy4
+label: 貪欲な和集合の既定（run_miss_overlap.py）
+base: FinalFusion_SAM_APM_OverlapTrain
+members:
+  - FinalFusion_DEM_APM_OverlapTrain
+  - FinalFusion_SAM_APM_LU_OverlapTrain
+  - FinalFusion_SAM_APM_OL_LogitHinge
+note: analysis/run_miss_overlap.py の DEFAULT。貪欲に足していく実験で使う。

@@ -35,6 +35,9 @@ COLUMNS = [
     "recall", "precision", "f1",
     "tp", "fp", "fn", "n_tiles", "n_gt_instances", "n_pred_instances",
     "evaluated_at", "machine", "weights_sha256", "note",
+    # アンサンブル（和集合）の素性。docs/設計_アンサンブルの記録.md の 3.2
+    # **既存の記録には空で入る。** DictWriter が無い項目を空欄にするだけで壊れない
+    "members", "n_members", "stage2_model", "thr", "thr_split",
 ]
 
 _SAFE = re.compile(r"[^A-Za-z0-9_.-]")
@@ -156,13 +159,44 @@ def record_eval(*, run_id, condition, region, tileset, scope, metric_kind,
             continue
         if (o.get("condition"), o.get("region"), o.get("tileset"), o.get("scope"),
                 o.get("metric_kind"), o.get("setting", "")) == key:
-            old.unlink()
-            superseded.append(old.stem)
+            # **消す前に覚えておく。** 下で出してから消す（設計書 §6）
+            superseded.append((old.stem, o, old))
     if superseded:
-        print(f"[results] 同じ測定の古い記録を置き換えました: {len(superseded)} 件 "
-              f"({superseded[0][:50]}…)")
+        # **消す前に古い値を出す。** 鍵が同じなら黙って上書きされるので、
+        # 「何を置き換えたのか」が後から分からなくなる
+        # （2026-11-10 の4回目のレビュー A2）。
+        print(f"[results] 同じ測定の古い記録を置き換えます: {len(superseded)} 件")
+        for stem, o, _p in superseded:
+            print(f"  旧 R {o.get('recall')} / P {o.get('precision')} /"
+                  f" F {o.get('f1')} / n_tiles {o.get('n_tiles')}"
+                  f"  ({stem[:46]}…)")
+            if o.get("note"):
+                print(f"     旧 note: {str(o['note'])[:90]}")
+        print(f"  新 R {_num(recall)} / P {_num(precision)} / F {_num(f1)}"
+              f" / n_tiles {fields.get('n_tiles')}")
+        # **出したあとに消す。** 鍵の形は変えないと決めてあるので
+        # （設計書 §8）、止める手段は無い ── 画面に残すことが歯止めの代わり。
+        for _s, _o, p_old in superseded:
+            p_old.unlink()
 
     p = paths.results_dir("evals") / f"{eval_id}.json"
+    # **同じ eval_id の上書きも黙ってやらない。** 上の表示は eval_id が
+    # 違う古い記録だけを見ているので、同じ重みを測り直したとき
+    # （`evaluate` は run_id を重みの素性から作るので eval_id が同じになる）
+    # は何も出ずに置き換わっていた（2026-11-11 のレビュー）。
+    if p.exists():
+        try:
+            o = json.loads(p.read_text(encoding="utf-8"))
+            if (o.get("recall"), o.get("precision"), o.get("f1"),
+                    o.get("n_tiles")) != (_num(recall), _num(precision),
+                                          _num(f1), fields.get("n_tiles")):
+                print("[results] 同じ eval_id の記録を**違う値で**置き換えます")
+                print(f"  旧 R {o.get('recall')} / P {o.get('precision')} /"
+                      f" F {o.get('f1')} / n_tiles {o.get('n_tiles')}")
+                print(f"  新 R {_num(recall)} / P {_num(precision)} /"
+                      f" F {_num(f1)} / n_tiles {fields.get('n_tiles')}")
+        except Exception:                                 # noqa: BLE001
+            pass
     p.write_text(json.dumps(rec, ensure_ascii=False, indent=1, sort_keys=True),
                  encoding="utf-8")
     return p

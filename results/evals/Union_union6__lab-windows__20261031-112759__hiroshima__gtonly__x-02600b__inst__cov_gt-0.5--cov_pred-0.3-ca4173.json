@@ -1,0 +1,20 @@
+{
+ "condition": "Union_union6",
+ "eval_id": "Union_union6__lab-windows__20261031-112759__hiroshima__gtonly__x-02600b__inst__cov_gt-0.5--cov_pred-0.3-ca4173",
+ "evaluated_at": "2026-10-31T11:27:59",
+ "f1": 0.945036,
+ "machine": "lab-windows",
+ "members": "FinalFusion_SAM_APM_OverlapTrain|FinalFusion_DEM_APM_OverlapTrain|FinalFusion_SAM_APM_LU_OverlapTrain|FinalFusion_SAM_APM_BVB_OverlapTrain|FinalFusion_SAM_APM_BLD_OverlapTrain|FinalFusion_SAM_APM_BLD_seed2_OverlapTrain",
+ "metric_kind": "箇所",
+ "n_gt_instances": 8977,
+ "n_members": 6,
+ "n_pred_instances": 11069,
+ "note": "和集合そのもの（刈り取り前）。構成員 6本。床 465件 / 5.18%、天井 94.82%。正解のかたまり 8,977 / 予測 11,069。出どころ union_blind__hiroshima__union6.csv / analysis/run_union_blind.py",
+ "precision": 1.0,
+ "recall": 0.8958,
+ "region": "hiroshima",
+ "run_id": "Union_union6__lab-windows__20261031-112759",
+ "scope": "和集合上限",
+ "setting": "被覆 (cov_gt=0.5, cov_pred=0.3)",
+ "tileset": "警戒のみ"
+}

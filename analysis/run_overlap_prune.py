@@ -46,14 +46,14 @@ from analysis.data import load_pkl                                   # noqa: E40
 from analysis.run_instance_eval import SETTINGS                      # noqa: E402
 from analysis.run_overlap_eval import (OFFSETS, REGION_DIR,          # noqa: E402
                                        cos_window, grid_index, mosaic,
-                                       prep_mask, target_tiles)
+                                       plane_mosaic,
+                                       prep_mask, require_fit, target_tiles)
 from dc5lib import inputs as minputs  # noqa: E402
 from dc5lib import landuse as _landuse  # noqa: E402
 from dc5lib.device import pick_device                                # noqa: E402
 from dc5lib.instance_eval import (PRIMARY, label_instances,          # noqa: E402
                                   overlap_matrix)
 from dc5lib.models import build_model_for, load_weights              # noqa: E402
-from dc5lib.paths import dataset_path                                # noqa: E402
 from dc5lib.registry import get                                      # noqa: E402
 
 STRUCT4 = ndimage.generate_binary_structure(2, 1)
@@ -62,23 +62,53 @@ QS = [0.0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5]
 
 
 @torch.no_grad()
-def infer(cond, region, device, verbose=True):
+def infer(cond, region, device, verbose=True, tiles=None):
     """タイルごとに (正解, 二値マスク, 混ぜたロジット) を返す。
 
     二値化は確率側で行う（run_overlap_eval.py と同じ）。
+
+    `tiles` は**既定の対象タイル以外を測りたいときだけ**渡す
+    （背景タイルなど）。None なら `target_tiles` と同じ ── つまり
+    **既存の呼び出しの値は変わらない。** 近傍は pkl 全体から貼るので、
+    対象を絞っても貼り方は変わらない。
+
+    **既定の対象タイルで測るときは、条件の分割が合っているかを先に見る**
+    （`require_fit`）。和集合・2段目・刈り取りは全部ここを通るので、
+    別の分割で学習した条件はここで止まる。
     """
+    if tiles is None:
+        require_fit(cond, region)
     model = build_model_for(cond).to(device)
     load_weights(model, cond.weights, device=device)
     model.eval()
 
     dirname = REGION_DIR[region]
-    pkl = dataset_path(dirname, cond.pkl_for(dirname))
+    pkl = cond.pkl_for(dirname)
     if verbose:
         print(f"  読み込み: {os.path.basename(pkl)} ...", flush=True)
     ds = load_pkl(pkl)
     gi, gj, cell = grid_index(ds)
-    tiles = target_tiles(ds, region, float(getattr(cond, "bg_ratio", 0.0) or 0.0))
+    if tiles is None:
+        tiles = target_tiles(ds, region,
+                             float(getattr(cond, "bg_ratio", 0.0) or 0.0))
     W = cos_window()
+    # 土地利用以外の3入力目（建物など）。pkl の値をそのまま渡す
+    t3 = minputs.third_input(cond)
+    P3 = None
+    if t3 is not None:
+        if not hasattr(ds, t3.field):
+            raise AttributeError(
+                f"{os.path.basename(pkl)} に {t3.field} がありません。"
+                f"{cond.name} の dataset を確かめてください")
+        P3 = np.asarray(getattr(ds, t3.field))
+        if P3.shape[1] != t3.channels:
+            raise ValueError(f"{t3.field} の面が {P3.shape[1]} ですが "
+                             f"config は {t3.channels} です")
+        if verbose:
+            order = list(getattr(ds, t3.field + "Order", []) or [])
+            print(f"  3入力目 {t3.field} {P3.shape[1]}面"
+                  f"{'（' + '・'.join(order) + '）' if order else ''}",
+                  flush=True)
     if verbose:
         print(f"  {len(tiles)} タイル", flush=True)
 
@@ -88,7 +118,10 @@ def infer(cond, region, device, verbose=True):
     agree = 0
     for n, k in enumerate(tiles):
         D, A, _, LU = mosaic(ds, cell, gi, gj, k)
-        dems, airs, lus = [], [], []
+        # 地形・写真と同じ鏡像で埋める（入力の面どうしを揃える）
+        M3 = (plane_mosaic(P3, cell, gi, gj, k, fill="mirror")
+              if P3 is not None else None)
+        dems, airs, lus, th3 = [], [], [], []
         for dy, dx in OFFSETS:
             r, c = 128 + dy, 128 + dx
             dems.append(D[r:r + 128, c:c + 128])
@@ -96,6 +129,8 @@ def infer(cond, region, device, verbose=True):
             if LU is not None:
                 # 地形と同じ窓で切る
                 lus.append(LU[r:r + 128, c:c + 128])
+            if M3 is not None:
+                th3.append(M3[:, r:r + 128, c:c + 128])
         dem = torch.from_numpy(np.stack(dems)[:, None]).float().to(device)
         air = (torch.from_numpy(np.stack(airs).transpose(0, 3, 1, 2))
                .float().to(device) / 255.0)
@@ -103,6 +138,9 @@ def infer(cond, region, device, verbose=True):
         # _lu.pkl を2入力の条件で読むと、余計な引数を渡して落ちる。
         extra = ([_landuse.onehot_torch(np.stack(lus), device=device)]
                  if (LU is not None and minputs.needs_landuse(cond)) else [])
+        if M3 is not None:
+            extra.append(torch.from_numpy(np.stack(th3))
+                         .to(device).float() / 255.0)
         logit = model(dem, air, *extra)[:, 0]
         pr = torch.sigmoid(logit).cpu().numpy()
         lg = logit.cpu().numpy()
@@ -209,22 +247,46 @@ def full_scores(GT, PB):
             len(GT))
 
 
-def record(pp, region, res):
-    """results/evals/ に記録する。アンサンブルと同じ扱いで condition 列に名前を入れる。"""
+def record(pp, region, res, thr=None, thr_split=""):
+    """results/evals/ に記録する。アンサンブルと同じ扱いで condition 列に名前を入れる。
+
+    素性（docs/設計_アンサンブルの記録.md の 3.3）
+    ------------------------------------------
+    **pp から取れるものは pp から取る。** 呼ぶ側に二重に持たせない。
+
+        members / n_members   pp.union_list + pp.base（**誰を混ぜたか**）
+        stage2_model          pp.model（**シードの判別に要る**）
+        thr / thr_split       実際に当てた値と、それを選んだ split
+
+    なぜ要るか。`pp.display()` は label の散文なので、**構成員も2段目の
+    重み名も機械では取り出せなかった**。シードを分けて記録するには
+    後処理の定義ごと分ける必要がある（record_eval の鍵に model が
+    入らないので、同じ名前だと後のものが前のものを消す）。
+    """
     from dc5lib import results as R
 
     a_full, a_cent, inst, n_tiles = res
     tileset = {"hiroshima": "警戒のみ", "shimane": "全件"}[region]
     run_id = R.new_run_id(pp.name)
-    note = (f"後処理（{pp.display()}）。base={pp.base} / 推論={pp.inference} / "
-            f"{pp.feature}<={pp.threshold:g} のかたまりを捨てる。"
-            f"ensembles.yaml の postprocess / run_overlap_prune.py")
+    members = [pp.base] + list(pp.union_list)
+    thr = pp.threshold if thr is None else thr
+    prov = {"members": "|".join(members), "n_members": len(members),
+            "stage2_model": pp.model or "", "thr": thr,
+            "thr_split": thr_split}
+    head = (f"後処理（{pp.display()}）。base={pp.base} / 推論={pp.inference} / "
+            f"{pp.feature}<={thr:g} のかたまりを捨てる。"
+            f"構成員 {len(members)}本")
+    if pp.model:
+        head += f" / 2段目 {pp.model}"
+    if thr_split:
+        head += f" / しきい値は {thr_split} で選んだ"
+    note = head + "。ensembles.yaml の postprocess / run_overlap_prune.py"
     n = 0
     for scope, a in (("通常", a_full), ("境界", a_cent)):
         R.record_eval(run_id=run_id, condition=pp.name, region=region,
                       tileset=tileset, scope=scope, metric_kind="面積",
                       recall=a["recall"], precision=a["precision"], f1=a["f1"],
-                      n_tiles=n_tiles, note=note)
+                      n_tiles=n_tiles, note=note, **prov)
         n += 1
     for setting, r in inst.items():
         R.record_eval(run_id=run_id, condition=pp.name, region=region,
@@ -233,10 +295,13 @@ def record(pp, region, res):
                       precision=r["箇所Precision"], f1=r["箇所F値"],
                       n_gt_instances=r["箇所_正解数"],
                       n_pred_instances=r["箇所_予測数"],
-                      note="連結性8近傍 / 最小サイズ10px / 後処理")
+                      note="連結性8近傍 / 最小サイズ10px / " + head, **prov)
         n += 1
     out = R.build_metrics_csv()
     print(f"\n記録: evals {n} 件 / metrics.csv を更新（{out}）")
+    print(f"  構成員 {len(members)}本 / 2段目 {pp.model or '—'}"
+          f" / しきい値 {thr:g}"
+          f"{'（' + thr_split + ' で選んだ）' if thr_split else ''}")
 
 
 def main():
@@ -269,6 +334,12 @@ def main():
                      f"（定義は inference={pp.inference}）")
 
     cond = get(args.condition)
+    # **推論の前に止める。** 学習に使った地域の、学習タイルを含む集合は
+    # 記録しない（実装書 §8。歯止めは dc5lib/evaluate.py に1つ）。
+    if args.record:
+        from dc5lib.evaluate import check_training_region_names
+        check_training_region_names([pp.base] + list(pp.union_list),
+                                    args.region)
     device = torch.device(args.device) if args.device else pick_device()
     print(f"条件 {cond.name} / 地域 {args.region} / device {device}")
     print("オーバーラップ推論（9窓・cos窓）。二値化は確率側、刈り取りはロジット")

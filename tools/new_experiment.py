@@ -34,11 +34,17 @@ from dc5lib.losses import DEFAULTS as LOSS_DEFAULTS  # noqa: E402
 
 # LU は土地利用（L03-b の9区分 one-hot）。pkl には区分番号1chで入っていて、
 # 読み込み時に one-hot に展開する（dc5lib/landuse.py の CHANNEL_ORDER）
-SOURCE_CHANNELS = {"DEM": 1, "SAM": 1, "APM": 3, "GEO": 3, "LU": 9}
+#
+# BLD は実建物の2面（建物・無壁舎）、BVB はそれに仮想建物を足した3面。
+# どちらも pkl の値（被覆率×255）をそのまま渡し、読み込み側で /255 する
+# （航空写真と同じ扱い。dc5lib/inputs.py の third_input）
+SOURCE_CHANNELS = {"DEM": 1, "SAM": 1, "APM": 3, "GEO": 3, "LU": 9,
+                   "BLD": 2, "BVB": 3}
 SOURCE_KEY = {"DEM": "terrain", "SAM": "terrain", "APM": "airphoto",
-              "GEO": "geology", "LU": "landuse"}
+              "GEO": "geology", "LU": "landuse",
+              "BLD": "building", "BVB": "building"}
 SOURCE_FIELD = {"DEM": "DEM", "SAM": "DEM", "APM": "AirPhoto", "GEO": "Geo",
-                "LU": "LandUse"}
+                "LU": "LandUse", "BLD": "Building", "BVB": "BuildingVB"}
 
 
 def parse_inputs(spec):
@@ -256,6 +262,19 @@ TEMPLATE = {
 }
 
 
+def condition_templates(tpl: Path):
+    """`templates/` のうち、**条件ごとに複製する雛形**（`__CONDITION__` を持つもの）。
+
+    `templates/union.ipynb` は和集合の雛形で、条件には属さない。以前は
+    `templates/*.ipynb` を全部複製していたので、新しい条件を作るたびに
+    `union.ipynb` が混ざった（2026-11-12 のレビュー。`audit_wiring` は
+    条件のノートブックを `train.ipynb` と `eval_shimane.ipynb` の2本と
+    決めているので、3本あると「ノートブックが 3 個」と出る）。
+    """
+    return [nb for nb in sorted(Path(tpl).glob("*.ipynb"))
+            if "__CONDITION__" in nb.read_text(encoding="utf-8")]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("name", nargs="?", help="新しい条件名")
@@ -436,6 +455,23 @@ def main():
                 msg += f" / 損失を config 駆動に差し替え（{n}箇所）"
             print(f"  複製: experiments/{a.name}/{nb.name}（{msg}）")
             _warn_old_notebook(dst, a.base)
+    else:
+        # **--from を付けなければ templates/ から作る。**
+        # 旧世代のノートブックをコピーして増やすのをやめるため、
+        # これが既定の道である（docs/ノートブックの作り方.md）。
+        tpl = paths.REPO_ROOT / "templates"
+        nbs = condition_templates(tpl)
+        if not nbs:
+            print(f"  ! 雛形が見つかりません: {tpl}")
+        for nb in nbs:
+            dst = d / nb.name
+            t = nb.read_text(encoding="utf-8")
+            t = t.replace("__CONDITION__", a.name)
+            dst.write_text(t, encoding="utf-8")
+            print(f"  作成: experiments/{a.name}/{nb.name}（雛形から。"
+                  "CONDITION を差し替え）")
+        if nbs:
+            print("     **docs/ノートブックの作り方.md を読んでから回すこと。**")
 
     # 何が出来たかをその場で見せる。指定し忘れ（行継続の切れなど）に気づけるように。
     try:
@@ -478,9 +514,18 @@ def main():
   3. ノートブックを編集して学習
        重みは自動的に dc5-data/weights/{a.name}/ に保存されます
 """)
-    if not a.base:
-        print("  ※ --from <既存の条件> を付けると、config とノートブックを"
-              "複製して始められます。")
+    # **`--from` を勧めない。** 既存のノートブックをコピーして条件を増やすのは
+    # CLAUDE.md の 7 で禁じてある（55本のうち30本で config が届かなくなった原因）。
+    # 以前はここで `--from` を案内していた（2026-11-12 のレビュー）。
+    if a.base:
+        print(f"  ※ --from {a.base} で**既存のノートブックを複製しました。**"
+              "CLAUDE.md の 7（既存のノートブックをコピーして条件を増やさない）に"
+              "当たります。")
+        print("     config だけ引き継ぎたいときは、--from を付けずに作ってから "
+              "config.yaml を写してください。")
+    else:
+        print("  ※ ノートブックは templates/ の雛形から作りました"
+              "（docs/ノートブックの作り方.md）。")
 
 
 if __name__ == "__main__":

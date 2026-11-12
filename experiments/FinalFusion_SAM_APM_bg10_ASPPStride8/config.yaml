@@ -15,6 +15,12 @@ inputs:
 augment: false
 bg_ratio: 0.1
 status: active
+# 学習した手順の世代。詳しくは docs/設計図_修正案.md の 6
+protocol: v1-notebook
+# 和集合（アンサンブル）に入れてよいか
+ensemble: true
+# torch.manual_seed を呼んで学習したか
+seeded: false
 label: ''
 note: ASPP に加えてボトルネックを 16x16 に上げた版（出力ストライド16→8）。ASPP単体は補助ヘッドが+0.119改善したのに本体が変わらず、デコーダはスキップではなくボトルネック経路を使っていると分かったため、そちらの解像度を上げる。次の手_文脈と不均衡.md
   の案A+案B

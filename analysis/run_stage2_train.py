@@ -22,11 +22,15 @@
     # かたまりデータを作る（1段目の推論。数分。SSDにキャッシュ）
     python analysis/run_stage2_train.py --build
 
-    # 学習（キャッシュから。軽い）
-    python analysis/run_stage2_train.py --train --name Stage2_SAM_OL_v1
+    # 学習（キャッシュから。軽い）。**--name は新しい名前にする**
+    python analysis/run_stage2_train.py --train --name <新しい名前>
 
     # まとめて
-    python analysis/run_stage2_train.py --build --train --name Stage2_SAM_OL_v1
+    python analysis/run_stage2_train.py --build --train --name <新しい名前>
+
+`--name` の既定 `Stage2_SAM_OL_v1` は**既にある重み**なので、付け忘れると
+学習の前に止まる（`guard_existing_weights`。作り直すなら `--overwrite`）。
+以前の例はこの名前を書いていた（2026-11-12 に直した）。
 """
 
 from __future__ import annotations
@@ -46,6 +50,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from analysis import config
 from analysis.data import load_pkl
 from analysis.run_overlap_eval import (OFFSETS, cos_window, grid_index,  # noqa: E402
+                                       plane_mosaic,
                                        mosaic, prep_mask)
 from dc5lib import inputs as minputs  # noqa: E402
 from dc5lib import landuse as _landuse  # noqa: E402
@@ -84,6 +89,26 @@ def cache_path(cond_name, split, wide=False, lu=False, union=None, agree=False):
     return d / f"{cond_name}__hiroshima__{split}{tag}.npz"
 
 
+def third_planes(cond, ds):
+    """3入力目（建物など。土地利用ではないもの）の面を pkl から取る。
+
+    **土地利用だけを通していたせいで、建物を相方にすると落ちていた。**
+    run_overlap_prune.infer と同じ作り方に揃えてある。
+    """
+    t3 = minputs.third_input(cond)
+    if t3 is None:
+        return None, None
+    if not hasattr(ds, t3.field):
+        raise AttributeError(
+            f"{cond.name} は3入力目 {t3.field} を要りますが pkl にありません。"
+            f"config の dataset を確かめてください")
+    P3 = np.asarray(getattr(ds, t3.field))
+    if P3.shape[1] != t3.channels:
+        raise ValueError(f"{t3.field} の面が {P3.shape[1]} ですが config は "
+                         f"{t3.channels} です")
+    return P3, t3
+
+
 @torch.no_grad()
 def union_logits(cond2, split, device, batch_hint=500, region="hiroshima"):
     """和集合の相方（2つめの条件）のロジットを、タイルごとに先に作る。
@@ -100,7 +125,7 @@ def union_logits(cond2, split, device, batch_hint=500, region="hiroshima"):
     （assert で確かめる）。
     """
     dirname = {"hiroshima": "Hiroshima", "shimane": "Shimane"}[region]
-    pkl = dataset_path(dirname, cond2.pkl_for(dirname))
+    pkl = cond2.pkl_for(dirname)
     print(f"  [和集合の相方] 読み込み: {pkl.name}")
     ds = load_pkl(pkl)
     if region == "shimane":
@@ -112,6 +137,10 @@ def union_logits(cond2, split, device, batch_hint=500, region="hiroshima"):
         tiles = [hz[i] for i in {"train": tr, "val": va, "test": te}[split]]
     print(f"  [和集合の相方] {cond2.name}: {len(tiles)} タイル")
 
+    P3, t3 = third_planes(cond2, ds)
+    if t3 is not None:
+        print(f"  [和集合の相方] 3入力目 {t3.field} {P3.shape[1]}面")
+
     model = build_model_for(cond2).to(device)
     load_weights(model, cond2.weights, device=device)
     model.eval()
@@ -122,13 +151,18 @@ def union_logits(cond2, split, device, batch_hint=500, region="hiroshima"):
     t0 = time.time()
     for n, k in enumerate(tiles):
         D, A, _, LU = mosaic(ds, cell, gi, gj, k)
-        dems, airs, lus = [], [], []
+        # 地形・写真と同じ鏡像で埋める（入力の面どうしを揃える）
+        M3 = (plane_mosaic(P3, cell, gi, gj, k, fill="mirror")
+              if P3 is not None else None)
+        dems, airs, lus, th3 = [], [], [], []
         for dy, dx in OFFSETS:
             r, c = 128 + dy, 128 + dx
             dems.append(D[r:r + 128, c:c + 128])
             airs.append(A[r:r + 128, c:c + 128])
             if LU is not None:
                 lus.append(LU[r:r + 128, c:c + 128])
+            if M3 is not None:
+                th3.append(M3[:, r:r + 128, c:c + 128])
         dem = torch.from_numpy(np.stack(dems)[:, None]).float().to(device)
         air = (torch.from_numpy(np.stack(airs).transpose(0, 3, 1, 2))
                .float().to(device) / 255.0)
@@ -136,6 +170,9 @@ def union_logits(cond2, split, device, batch_hint=500, region="hiroshima"):
         # （build と同じ判定。_lu.pkl を2入力の条件で読むと落ちる）
         extra = ([_landuse.onehot_torch(np.stack(lus), device=device)]
                  if (LU is not None and minputs.needs_landuse(cond2)) else [])
+        if M3 is not None:
+            extra.append(torch.from_numpy(np.stack(th3))
+                         .to(device).float() / 255.0)
         lo = model(dem, air, *extra)[:, 0]
         pr = torch.sigmoid(lo).cpu().numpy()
         lg = lo.cpu().numpy()
@@ -180,10 +217,21 @@ def build(cond, split, device, batch_hint=500, wide=False, lu=False,
     u_list = ([] if union_cond is None else
               ([union_cond] if not isinstance(union_cond, (list, tuple))
                else list(union_cond)))
+    # **1段目の3入力目（建物など）はこの経路では未対応。**
+    # 相方（union_logits）は third_planes で通るようにしたが、
+    # 1段目はまだ土地利用だけである。黙って落ちるより先に止める。
+    if minputs.third_input(cond) is not None:
+        sys.exit(
+            f"1段目 {cond.name} は3入力目"
+            f"（{minputs.third_input(cond).field}）を要りますが、"
+            "この経路は土地利用以外の3入力目に未対応です。"
+            "和集合の相方としてなら --union-with で使えます")
     u_packs = [union_logits(c2, split, device) for c2 in u_list]
 
-    pkl = dataset_path("Hiroshima",
-                       pkl_override or cond.pkl_for("Hiroshima"))
+    # pkl_override はファイル名だけ。無いときは条件から引く
+    # (dataset_path に絶対パスを渡すと pathlib が左を捨てるだけなので通さない)
+    pkl = (dataset_path("Hiroshima", pkl_override) if pkl_override
+           else cond.pkl_for("Hiroshima"))
     print(f"  読み込み: {pkl.name}")
     ds = load_pkl(pkl)
     hz = [k for k in range(len(ds.No)) if np.max(np.asarray(ds.Mask[k])) >= 1]
@@ -342,10 +390,30 @@ def augment(x, jitter=0):
     return x
 
 
+def guard_existing_weights(name, overwrite=False):
+    """**既存の2段目の重みを黙って作り直さない**（CLAUDE.md・設計書 §8）。
+
+    1段目の `fit` には同じ歯止めがあるが、こちらには無かった
+    （2026-11-12 のレビュー）。`--name` の既定は固定の名前なので、
+    付け忘れると既存の重みを上書きする。後処理の定義（`ensembles.yaml` の
+    `postprocess:`）が指している重みを作り直すと、**記録した数字が
+    二度と出なくなる。** 学習を始める前に呼ぶ。
+    """
+    out = paths.data_root() / "weights" / name / "best_model.pth"
+    if out.exists() and not overwrite:
+        raise FileExistsError(
+            f"2段目の重み {name} が既にあります（{out}）。"
+            "**学習すると上書きされます。** 別の --name を付けるか、"
+            "作り直してよいなら --overwrite を付けてください。")
+    return out
+
+
 def train(cond, name, device, epochs=60, batch_size=128, lr=1e-3,
           patience=12, seed=42, split_seed=42, val_frac=0.2, use_augment=False,
           no_scalar=False, no_logit=False, weight_decay=0.0, jitter=0,
-          wide=False, lu=False, no_narrow=False, union=None, agree=False):
+          wide=False, lu=False, no_narrow=False, union=None, agree=False,
+          overwrite=False):
+    guard_existing_weights(name, overwrite)
     stage2.set_agree_channel(agree)
     f = cache_path(cond.name, "val", wide, lu, union=union, agree=agree)
     if not f.exists():
@@ -477,7 +545,14 @@ def train(cond, name, device, epochs=60, batch_size=128, lr=1e-3,
                 "stage1": cond.name, "crop": stage2.CROP,
                 "wide_ch": stage2.N_WIDE_CH if wide else 0,
                 "wide": bool(wide), "landuse": bool(lu),
-                "in_ch": stage2.N_CH, "agree": bool(agree)}, out)
+                "in_ch": stage2.N_CH, "agree": bool(agree),
+                # **何で学習したかを重みに残す**（2026-11-12）。相方と乱数の種は
+                # それまで重みのどこにも無く、後処理の定義と人の記憶だけが
+                # 頼りだった。`run_stage2_eval.py` が相方を照合する。
+                "union": list(([union] if isinstance(union, str) else union)
+                              or []),
+                "seed": int(seed), "split_seed": int(split_seed),
+                "val_frac": float(val_frac)}, out)
     print("重みを保存:", out)
     return out
 
@@ -523,11 +598,20 @@ def main():
     ap.add_argument("--split-seed", type=int, default=42,
                     help="学習/検証のタイル分割。既定で固定しておくと "
                          "分割のゆらぎを混ぜずに初期化のゆらぎだけ測れる")
+    ap.add_argument("--overwrite", action="store_true",
+                    help="既存の2段目の重みを作り直す（既定は止まる）")
     ap.add_argument("--device", default=None)
     args = ap.parse_args()
 
     if not (args.build or args.train):
         sys.exit("--build か --train のどちらかを指定してください")
+    # **--build（1段目の推論）の前に止める。** あとで止めると
+    # かたまりデータを作り終えてから怒られる
+    if args.train:
+        try:
+            guard_existing_weights(args.name, args.overwrite)
+        except FileExistsError as e:
+            sys.exit(str(e))
 
     cond = get(args.stage1)
     device = torch.device(args.device) if args.device else pick_device()
@@ -549,7 +633,8 @@ def main():
               jitter=args.jitter, wide=args.wide, lu=args.landuse,
               no_narrow=args.no_narrow,
               seed=args.seed, split_seed=args.split_seed,
-              union=args.union_with, agree=args.agree)
+              union=args.union_with, agree=args.agree,
+              overwrite=args.overwrite)
 
 
 if __name__ == "__main__":

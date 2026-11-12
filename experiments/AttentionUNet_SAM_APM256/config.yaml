@@ -15,6 +15,12 @@ inputs:
 augment: false
 bg_ratio: 0.0
 status: active
+# 学習した手順の世代。詳しくは docs/設計図_修正案.md の 6
+protocol: v1-notebook
+# 和集合（アンサンブル）に入れてよいか
+ensemble: true
+# torch.manual_seed を呼んで学習したか
+seeded: false
 label: Attention SAM+APM 256px
 note: Attention ゲート + 航空写真だけ 256x256（約2.24m/画素）。展望.md 6節。
   解像度と Attention の2つを同時に変えているので効果の切り分けはできない。

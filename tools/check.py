@@ -7,6 +7,7 @@
   - metrics.csv が evals/ と食い違っていないか
   - ensembles.yaml のメンバーが実在し、bg_ratio が揃っているか
   - 学習ノートブックが config.yaml を無視して直書きしていないか
+  - ゆらぎ幅（帯）の写しが増えていないか（tools/check_bands.py）
 """
 import json, re, subprocess, sys
 from pathlib import Path
@@ -99,7 +100,6 @@ def _missing_imports(src):
     return out
 
 
-_TRAINED = {p.parent.name for p in (paths.results_dir() / "curves").glob("*.csv")}
 for d in sorted(Path(paths.experiments_dir()).iterdir()):
     nb = d / "Keisya_airPhoto_final6.ipynb"
     if not nb.exists() or (paths.results_dir() / "curves" / f"{d.name}.csv").exists():
@@ -141,6 +141,48 @@ if csv_path.exists():
     if csv_path.read_bytes() != before:
         problems.append("metrics.csv が evals/ と食い違っています（作り直しました）")
 
+# 3x3 を貼る向きが、評価側と学習側とで揃っているか。
+# **揃っていなかった。** run_building_miss.py の bld_mosaic が行に経度・
+# 列に緯度を使っていたので、周囲8枚が90度回って貼られていた（2026-10-27 に直した）。
+# 中央タイルだけは正しいので、`41` の `bld_in` は無事だが近接の数字はずれていた。
+# 向きは3か所にある（run_overlap_eval.mosaic / plane_mosaic /
+# dc5lib.overlap.NeighborMosaic.build）ので、ここで突き合わせる。
+try:
+    import numpy as _np
+    from types import SimpleNamespace as _NS
+    from analysis.run_overlap_eval import (mosaic as _mos, plane_mosaic as _pm,
+                                           grid_index as _gidx, DLON, DLAT)
+    from dc5lib.overlap import NeighborMosaic as _NM
+
+    _T = 128
+    _geo, _dem, _pl = [], [], []
+    for _j in range(3):
+        for _i in range(3):
+            _geo.append((130.0 + _i * DLON, DLON / _T, 0.0,
+                         34.0 + _j * DLAT, 0.0, -DLAT / _T))
+            _dem.append(_np.full((_T, _T), 10 * _j + _i, _np.float32))
+            _pl.append(_np.full((1, _T, _T), 10 * _j + _i, _np.uint8))
+    _ds = _NS(GeoInfo=_geo, DEM=_dem,
+              AirPhoto=[_np.zeros((_T, _T, 3), _np.uint8)] * 9)
+    _gi, _gj, _cell = _gidx(_ds)
+    _k = [t for t in range(9) if _gi[t] == 1 and _gj[t] == 1][0]
+
+    def _grid(a):
+        return [[int(round(float(a[r * _T + 64, c * _T + 64]))) for c in range(3)]
+                for r in range(3)]
+
+    _a = _grid(_mos(_ds, _cell, _gi, _gj, _k)[0])
+    _b = _grid(_pm(_np.asarray(_pl), _cell, _gi, _gj, _k)[0])
+    _nm = _NM(_geo, allowed=list(range(9)), tile=_T)
+    _c = _grid(_nm.build(_k, {"x": _np.asarray(_pl)})["x"][:, :, 0])
+    for _name, _got in (("plane_mosaic", _b), ("overlap.NeighborMosaic", _c)):
+        if _got != _a:
+            problems.append(
+                f"3x3 を貼る向きが mosaic() と {_name} で違います。"
+                f"mosaic={_a} / {_name}={_got}")
+except Exception as _e:
+    problems.append(f"3x3 の向きの検査ができませんでした: {_e}")
+
 # git に大きなファイルが載っていないか
 try:
     files = subprocess.run(["git", "ls-files"], capture_output=True, text=True,
@@ -152,6 +194,182 @@ try:
                             f"({p.stat().st_size/2**20:.0f}MB)")
 except Exception:
     pass
+
+# ----------------------------------------------------------------------
+# ノートブックが nbformat として妥当か
+#
+# **これが無いと nbconvert で実行できないノートブックに気づけない。**
+# 2026-10-29 に雛形を書いたとき、コードセルに `outputs` を入れ忘れて
+# `Notebook JSON is invalid: 'outputs' is a required property` で
+# 実行が拒否された。手で開くと動くので、通しで走らせるまで気づけない。
+# ----------------------------------------------------------------------
+try:
+    import io as _io
+
+    import nbformat as _nbf
+
+    for _nb in sorted(paths.REPO_ROOT.glob("templates/*.ipynb")) + sorted(
+            paths.experiments_dir().glob("*/*.ipynb")):
+        try:
+            _d = _nbf.read(_io.StringIO(_nb.read_text(encoding="utf-8")),
+                           as_version=4)
+            _nbf.validate(_d)
+        except Exception as _e:                           # noqa: BLE001
+            problems.append(
+                f"{_nb.relative_to(paths.REPO_ROOT)} が nbformat として"
+                f"妥当ではありません（nbconvert で実行できない）: "
+                f"{str(_e).splitlines()[0][:90]}")
+except ImportError:
+    pass
+
+# ----------------------------------------------------------------------
+# 雛形（templates/*.ipynb）が、定義していない名前を使っていないか
+#
+# **雛形は誰も実行しないまま複製される。** `templates/union.ipynb` は
+# 2026-10-30 の改名（`dc5lib/ensemble.py` → `union.py`）のあとも
+# `ensemble.get(...)` と呼んでいて、**最初のセルで NameError になっていた**
+# （2026-11-11 のレビュー）。import は `from dc5lib import union` に
+# 直してあったので、nbformat の検査も import の検査も通っていた。
+# セルを上から順につなぎ、**どこでも束縛されていない名前の読み出し**を探す。
+# ----------------------------------------------------------------------
+def _undefined_names(src):
+    import ast
+    import builtins
+    tree = ast.parse(src)
+    bound = set(dir(builtins)) | {"__file__", "__name__", "get_ipython"}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for a in node.names:
+                bound.add((a.asname or a.name).split(".")[0])
+        elif isinstance(node, (ast.FunctionDef, ast.ClassDef,
+                               ast.AsyncFunctionDef)):
+            bound.add(node.name)
+            if not isinstance(node, ast.ClassDef):
+                for a in (node.args.args + node.args.kwonlyargs
+                          + node.args.posonlyargs):
+                    bound.add(a.arg)
+                for a in (node.args.vararg, node.args.kwarg):
+                    if a is not None:
+                        bound.add(a.arg)
+        elif isinstance(node, ast.Lambda):
+            for a in (node.args.args + node.args.kwonlyargs
+                      + node.args.posonlyargs):
+                bound.add(a.arg)
+            for a in (node.args.vararg, node.args.kwarg):
+                if a is not None:               # `lambda *a: ...` の a
+                    bound.add(a.arg)
+        elif isinstance(node, ast.Name) and isinstance(
+                node.ctx, (ast.Store, ast.Del)):
+            bound.add(node.id)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bound.add(node.name)
+    return sorted({n.id for n in ast.walk(tree)
+                   if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+                   and n.id not in bound})
+
+
+for _nb in sorted(paths.REPO_ROOT.glob("templates/*.ipynb")):
+    try:
+        _cells = json.loads(_nb.read_text(encoding="utf-8"))["cells"]
+        _src = "\n".join(
+            "\n".join(ln for ln in "".join(c["source"]).splitlines()
+                      if not ln.lstrip().startswith(("%", "!")))
+            for c in _cells if c.get("cell_type") == "code")
+        for _n in _undefined_names(_src):
+            problems.append(
+                f"templates/{_nb.name}: 定義していない名前 `{_n}` を使っています"
+                "（上から順に実行すると NameError）")
+    except Exception as _e:                               # noqa: BLE001
+        problems.append(f"templates/{_nb.name} の名前の検査ができませんでした: {_e}")
+
+# ----------------------------------------------------------------------
+# config が実装に届いているか（`tools/audit_wiring.py` を呼ぶ）
+#
+# **「直書きの値が config と違う」は0件でなければならない。**
+# config を読んで条件を理解した人が、実際に回った値を間違えるからである。
+# 2026-10-29 にこれを0件にした（1件あったのは削除した条件のもの）。
+# 新世代（protocol: v3-base）には、さらに
+#   ・CFG = train_cfg(...) がある
+#   ・値の直書きが無い（どの項目も「経由」）
+# を要求する。**旧世代には掛けない。** 掛けると検査が常に赤くなり、
+# 誰も見なくなる（`docs/設計図_修正案.md` の `5`）。
+# ----------------------------------------------------------------------
+try:
+    sys.path.insert(0, str(paths.REPO_ROOT / "tools"))
+    import audit_wiring as _aw
+
+    _rows = [_aw.audit_one(d.name, d)
+             for d in sorted(x for x in paths.experiments_dir().iterdir()
+                             if (x / "config.yaml").exists())]
+    for _r in _rows:
+        for _k, _where, _what in _r.get("diff", []):
+            problems.append(
+                f"{_r['name']}: 直書きの値が config と違います"
+                f"（{_k} {_where} {_what}）")
+        _pr = getattr(_r.get("cond"), "protocol", "")
+        if _pr.startswith("v3"):
+            if any("CFG = train_cfg" in p for p in _r.get("problems", [])):
+                problems.append(
+                    f"{_r['name']}: protocol が v3-base なのに "
+                    "CFG = train_cfg(...) がありません")
+            _hard = [k for k, m in _r.get("marks", {}).items()
+                     if m in ("直書", "両方")]
+            if _hard:
+                problems.append(
+                    f"{_r['name']}: protocol が v3-base なのに値の直書きが"
+                    f"あります（{', '.join(_hard)}）。"
+                    "docs/ノートブックの作り方.md の 1 を参照")
+    # アンサンブルに ensemble: false の条件が混ざっていないか
+    _no = {_r["name"] for _r in _rows
+           if getattr(_r.get("cond"), "ensemble", True) is False}
+    if _no:
+        from analysis.run_stage2_room import STAGE1, UNION3
+        _used = {STAGE1, *UNION3}
+        _bad = _used & _no
+        if _bad:
+            problems.append(
+                "アンサンブルの既定の構成員に ensemble: false の条件が"
+                f"入っています: {sorted(_bad)}")
+except Exception as _e:                                   # noqa: BLE001
+    problems.append(f"配線の検査ができませんでした: {_e}")
+
+# docs/実装書.md の署名と定数が、いまのコードと合っているか。
+# **「これだけ読めば実装できる」と書いた文書が古いのは一番害が大きい。**
+try:
+    import io as _io
+    import contextlib as _ctx
+    sys.argv = [sys.argv[0]]
+    from tools import verify_docs as _vd
+    _buf = _io.StringIO()
+    try:
+        with _ctx.redirect_stdout(_buf):
+            _vd.main()
+    except SystemExit as _se:
+        if _se.code:
+            problems.append(
+                "docs/実装書.md がコードと食い違っています"
+                "（python tools/verify_docs.py で詳細）")
+except Exception as _e:                                   # noqa: BLE001
+    problems.append(f"実装書の照合ができませんでした: {_e}")
+
+# ゆらぎ幅（帯）の写しが増えていないか（`tools/check_bands.py`）。
+# **値が正しくても、測り直したときに古い帯のまま判定が反転する。**
+# 既知のぶんは許し、増えたときだけ落ちる（実装書 `5`）。
+try:
+    from tools import check_bands as _cb
+    problems += _cb.scan(paths.REPO_ROOT)
+except Exception as _e:                                   # noqa: BLE001
+    problems.append(f"帯の直書きの検査ができませんでした: {_e}")
+
+# 歯止めが本当に止まるか（`tools/test_guards.py`）。
+# **設計書 7 が「止める」と書いているのに通る箇所が2つあった**
+# （2026-11-08 のレビュー）。文書と実装の食い違いは機械で見る。
+try:
+    from tools import test_guards as _tg
+    for _p in _tg.run():
+        problems.append(f"歯止めが効いていません: {_p}")
+except Exception as _e:                                   # noqa: BLE001
+    problems.append(f"歯止めの検査ができませんでした: {_e}")
 
 if problems:
     print("検査で問題が見つかりました:")

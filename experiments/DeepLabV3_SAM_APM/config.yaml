@@ -17,6 +17,12 @@ inputs:
 augment: false
 bg_ratio: 0.0
 status: active
+# 学習した手順の世代。詳しくは docs/設計図_修正案.md の 6
+protocol: v2-config
+# 和集合（アンサンブル）に入れてよいか
+ensemble: true
+# torch.manual_seed を呼んで学習したか
+seeded: true
 label: DeepLabv3 SAM+APM
 note: 'アーキテクチャの族の比較（FCN / PSPNet / SegFormer と並べる）。符号化器は MultiEncoderUNet と同一にしてあり、違いは頭だけ。ストライド8（16x16）で
   ASPP をかけて x8 に拡大する。拡張率は特徴マップの大きさに合わせて (2,4,6) に縮めてある。元論文は 513x513・ストライド16（33x33）で

@@ -33,6 +33,15 @@ except Exception:
     pass
 
 from dc5lib import paths, splits
+from dc5lib.instance_eval import band
+
+# 帯の原本は `dc5lib/instance_eval.py`（実装書 `5`）。
+# `hiroshima_block` は広島のタイルなので広島の帯を使う。
+# **ただしこの帯は乱数テスト 2,964枚で測ったもので、ブロック分割では
+# 測り直していない**（流用。`docs/ゆらぎ幅.md` に測定は無い）。
+# 知らない地域は `KeyError` で落ちる ── **黙って広島の帯を当てない。**
+BAND_REGION = {"hiroshima_block": "hiroshima",
+               "hiroshima": "hiroshima", "shimane": "shimane"}
 
 ORDER = ["1-3", "4-15", "16+"]
 LABEL = {"1-3": "1-3 歩（〜1.7km）",
@@ -108,8 +117,9 @@ def main():
                           formatters={"R": "{:.4f}".format, "P": "{:.4f}".format,
                                       "F": "{:.4f}".format}))
         d = a.F.max() - a.F.min()
+        b = band(BAND_REGION[args.region], "area")
         print(f"  層のあいだの幅 {d:.4f}"
-              f"（面積F のゆらぎ幅 0.0018 の {d / 0.0018:.1f} 倍）")
+              f"（面積F のゆらぎ幅 {b} の {d / b:.1f} 倍）")
         print()
 
     i = inst_by_bin(args.condition, args.region, bins)
@@ -120,8 +130,9 @@ def main():
                                       "最良IoU": "{:.4f}".format,
                                       "中央の大きさ": "{:.0f}".format}))
         d = i.箇所R.max() - i.箇所R.min()
+        b = band(BAND_REGION[args.region])
         print(f"  層のあいだの幅 {d:.4f}"
-              f"（箇所F のゆらぎ幅 0.0071 の {d / 0.0071:.1f} 倍）")
+              f"（箇所F のゆらぎ幅 {b} の {d / b:.1f} 倍）")
         print()
 
     # 設計どおり正例率が揃っているかの念押し

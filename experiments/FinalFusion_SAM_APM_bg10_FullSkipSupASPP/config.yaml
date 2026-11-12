@@ -15,6 +15,12 @@ inputs:
 augment: false
 bg_ratio: 0.1
 status: active
+# 学習した手順の世代。詳しくは docs/設計図_修正案.md の 6
+protocol: v2-config
+# 和集合（アンサンブル）に入れてよいか
+ensemble: true
+# torch.manual_seed を呼んで学習したか
+seeded: true
 label: ''
 note: 全スケール結合 + ブランチ別監督 + ブランチ別ASPP。段階3。ASPPをブランチ別にしたのは、結合後だと dilation 畳み込みがどの受容野でも両ブランチを混ぜるため。傾斜のパターンと建物・植生のテクスチャは自然なスケールが違う
 dataset:

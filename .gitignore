@@ -34,3 +34,16 @@ docs/論文/
 
 # --- 応募用のポートフォリオ（個人の資料。GitHub には上げない） ---
 docs/ポートフォリオ/
+
+# --- 他者の予稿・論文PDF（再配布になるので上げない） ---
+# docs/1C2-4.pdf（FSS2026）のように、引用のため手元に置くだけのもの。
+# 内容の要約・引用は docs の中に書くが、PDF 自体は push しない。
+# **`docs/*.pdf` はサブフォルダに届かない。** 下の docs/発表/ は別に書く。
+docs/*.pdf
+
+# --- 発表資料の生成物（原本は .md なので push しない） ---
+# docs/発表/SCIS_ISIS_2026_質疑応答.md が原本で、Word と PDF はそこから起こす。
+#   python docs/論文/build_roadmap.py --src docs/発表/<名前>.md --out docs/発表/<名前>.docx
+# **.pptx は追跡したままにする**（生成元のスクリプトが無いものがあるため）。
+docs/発表/*.pdf
+docs/発表/*.docx

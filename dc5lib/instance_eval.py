@@ -104,6 +104,44 @@ DEFAULT_SETTINGS = {
     "IoU厳密1対1 (0.1)": dict(mode="iou_1to1", iou_thr=0.1),
 }
 PRIMARY = "被覆 (cov_gt=0.5, cov_pred=0.3)"
+# 主系統のしきい値と、かたまりの数え方。**ここが原本である。**
+# `analysis/` には `COV_GT = 0.5` `COV_PRED = 0.3` `MIN_SIZE = 10` の写しが
+# 9本にある（2026-11-12 のレビュー。帯の写しと同じ形）。値はどれも同じで、
+# **`tools/test_guards.py` が写しと原本の一致を見ている。**
+# 新しいスクリプトはここから読むこと。
+COV_GT = DEFAULT_SETTINGS[PRIMARY]["cover_gt"]
+COV_PRED = DEFAULT_SETTINGS[PRIMARY]["cover_pred"]
+MIN_SIZE = 10
+CONNECTIVITY = 8
+
+# ゆらぎ幅（帯）。**同じ構成を乱数だけ変えて学習し直したときの幅。**
+# 実測は docs/ゆらぎ幅.md、値は実装書 `4` の表。**ここが原本である。**
+# `analysis/` に写しが 14本あったので、新しいスクリプトはここから読む
+# （2026-11-10 の5回目のレビュー 4）。`tools/check_bands.py` が増えないか見る。
+#
+# **この形（地域 -> float）は変えない。** 指標を増やすときは BAND_AREA の
+# ように別の表を足すこと。入れ子にすると `BAND[region]` と書いている側が
+# 同時に全部落ちる（`EXPECT` に `n_all` を足して学習経路が死んだのと同じ）。
+BAND = {"hiroshima": 0.0071, "shimane": 0.0198}        # 箇所F
+BAND_AREA = {"hiroshima": 0.0018, "shimane": 0.0118}   # 面積F
+_BAND_ALIAS = {"広島": "hiroshima", "島根": "shimane"}
+_BAND_KIND = {"instance": BAND, "area": BAND_AREA}
+
+
+def band(region, kind="instance") -> float:
+    """地域名から帯を引く（`Hiroshima` / `hiroshima` / `広島` どれでも）。
+
+    `kind` は `"instance"`（箇所F。既定）か `"area"`（面積F）。
+    **指標ごとに帯は違う** ── 広島は箇所F 0.0071 に対して面積F 0.0018 で、
+    最も狭いものと最も広いもので 11倍ある（docs/ゆらぎ幅.md `4`）。
+    """
+    if kind not in _BAND_KIND:
+        raise KeyError(f"{kind} という指標はありません（{list(_BAND_KIND)}）")
+    tbl = _BAND_KIND[kind]
+    k = _BAND_ALIAS.get(str(region), str(region)).lower()
+    if k not in tbl:
+        raise KeyError(f"{region} の帯は分かりません（{list(tbl)}）")
+    return tbl[k]
 
 
 # ----------------------------------------------------------------------

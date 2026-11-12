@@ -46,10 +46,10 @@ from analysis.run_overlap_prune import infer as ol_infer        # noqa: E402
 from dc5lib.device import pick_device                           # noqa: E402
 from dc5lib.registry import get                                 # noqa: E402
 
-DEFAULT = ["FinalFusion_SAM_APM_OverlapTrain",
-           "FinalFusion_DEM_APM_OverlapTrain",
-           "FinalFusion_SAM_APM_LU_OverlapTrain",
-           "FinalFusion_SAM_APM_OL_LogitHinge"]
+# **構成員は unions/greedy4.yaml に書いてある。** ここには書かない
+from dc5lib import union as _uni                             # noqa: E402
+
+DEFAULT = _uni.get("greedy4").all
 COV_GT = 0.5
 
 
@@ -137,6 +137,9 @@ def main():
     dev = torch.device(args.device) if args.device else pick_device()
     names = args.conditions or DEFAULT
     print(f"device = {dev} / 条件 {len(names)}本")
+    # **混ぜてよいかを推論の前に確かめる**（設計書 §7。2026-11-12 のレビュー）
+    for _w in _uni.verify_names(names)["warn"]:
+        print(f"  ※ {_w}")
 
     masks, logits, labels, gts = {}, {}, {}, None
     for name in names:

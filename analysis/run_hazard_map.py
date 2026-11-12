@@ -79,7 +79,7 @@ def predict_region(cond, region, overlap, device, verbose=True):
       prob  float32 [タイル数, 128, 128] そのpklのタイル順
     """
     dirname = REGION_DIR[region]
-    pkl = dataset_path(dirname, cond.pkl_for(dirname))
+    pkl = cond.pkl_for(dirname)
     if verbose:
         print(f"    読み込み: {os.path.basename(str(pkl))} …", flush=True)
     ds = load_pkl(pkl)

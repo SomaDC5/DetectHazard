@@ -17,6 +17,12 @@ inputs:
 augment: false
 bg_ratio: 0.0
 status: active
+# 学習した手順の世代。詳しくは docs/設計図_修正案.md の 6
+protocol: v2-config
+# 和集合（アンサンブル）に入れてよいか
+ensemble: true
+# torch.manual_seed を呼んで学習したか
+seeded: true
 label: 全MLPデコーダ SAM+APM
 note: 'SegFormer_SAM_APM から符号化器だけを入れ替えた条件。展望_再現率をどう上げるか.md の 27 で「SegFormer の欠損 0.169
   は解像度では説明できない。残るのは符号化器」と消去法で結論したが、それは実証ではない。この1本がその検証にあたる。箇所F が 0.48 付近なら原因は全MLPデコーダ（消去法の結論が誤り）、0.63

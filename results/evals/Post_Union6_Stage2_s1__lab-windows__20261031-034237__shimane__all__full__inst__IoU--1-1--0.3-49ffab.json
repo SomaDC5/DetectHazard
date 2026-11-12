@@ -1,0 +1,23 @@
+{
+ "condition": "Post_Union6_Stage2_s1",
+ "eval_id": "Post_Union6_Stage2_s1__lab-windows__20261031-034237__shimane__all__full__inst__IoU--1-1--0.3-49ffab",
+ "evaluated_at": "2026-10-31T03:42:38",
+ "f1": 0.5254,
+ "machine": "lab-windows",
+ "members": "FinalFusion_SAM_APM_OverlapTrain|FinalFusion_DEM_APM_OverlapTrain|FinalFusion_SAM_APM_LU_OverlapTrain|FinalFusion_SAM_APM_BVB_OverlapTrain|FinalFusion_SAM_APM_BLD_OverlapTrain|FinalFusion_SAM_APM_BLD_seed2_OverlapTrain",
+ "metric_kind": "箇所",
+ "n_gt_instances": 27445,
+ "n_members": 6,
+ "n_pred_instances": 22257,
+ "note": "連結性8近傍 / 最小サイズ10px / 後処理（6本の和集合 + OL推論 + 2段目CNN（seed 1））。base=FinalFusion_SAM_APM_OverlapTrain / 推論=オーバーラップ / stage2<=0.4 のかたまりを捨てる。構成員 6本 / 2段目 Stage2_Union6_s1 / しきい値は 広島の検証split で選んだ",
+ "precision": 0.5866,
+ "recall": 0.4757,
+ "region": "shimane",
+ "run_id": "Post_Union6_Stage2_s1__lab-windows__20261031-034237",
+ "scope": "通常",
+ "setting": "IoU厳密1対1 (0.3)",
+ "stage2_model": "Stage2_Union6_s1",
+ "thr": 0.4,
+ "thr_split": "広島の検証split",
+ "tileset": "全件"
+}

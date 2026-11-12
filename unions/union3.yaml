@@ -1,0 +1,11 @@
+# アンサンブル（和集合）の定義。**構成員をここだけに書く。**
+# コードに構成員の名前を書かない（docs/ノートブックの作り方.md の 5）。
+name: union3
+label: 旧3本（42 の手札）
+base: FinalFusion_SAM_APM_OverlapTrain      # 比較の基準になる構成員
+members:
+  - FinalFusion_DEM_APM_OverlapTrain
+  - FinalFusion_SAM_APM_LU_OverlapTrain
+# この定義で出した数字が docs に載っているか。載っているものは**動かさない**
+recorded: docs/展望_再現率をどう上げるか.md 42
+note: K2 で床（誰も光らない割合）を測った3本。広島 715件(7.96%) / 島根 5,052件(18.41%)。

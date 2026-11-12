@@ -47,6 +47,7 @@ except Exception:
     pass
 
 from dc5lib import paths
+from dc5lib.instance_eval import band          # 帯の原本（実装書 `5`）
 
 MASK_YEAR = 2022            # 国土数値情報 A33 令和4年度版
 
@@ -139,11 +140,16 @@ def main():
             print(f"  写真が古い（〜{MASK_YEAR - 1}年度）  正解 {no:>5} 件  箇所R {ro:.4f}")
             print(f"  写真が同時期以降（{MASK_YEAR}年度〜）正解 {nn:>5} 件  箇所R {rn:.4f}")
             d = rn - ro
-            print(f"  差 {d:+.4f}（箇所F のゆらぎ幅 0.0071 の {abs(d) / 0.0071:.1f} 倍）")
+            # **帯は地域で違う。** ここは `--region` を取るのに
+            # 広島の帯を直書きしていたので、**島根で回すと帯の中の差を
+            # 「効いた」と誤読した**（2026-11-11 に原本読みへ直した）。
+            # 値は `dc5lib/instance_eval.py` の `BAND` にしか書かない。
+            b = band(args.region)
+            print(f"  差 {d:+.4f}（箇所F のゆらぎ幅 {b} の {abs(d) / b:.1f} 倍）")
             print()
-            if d > 0.0071:
+            if d > b:
                 print("  → **新しい写真のほうが当たる。指摘を支持する向き。**")
-            elif d < -0.0071:
+            elif d < -b:
                 print("  → **古い写真のほうが当たる。指摘とは逆向き。**")
             else:
                 print("  → **帯の中。写真の新旧で再現率は変わらない。**")

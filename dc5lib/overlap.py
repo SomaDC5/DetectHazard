@@ -13,7 +13,10 @@
 学習タイルの周囲を貼ると、窓は隣のタイルの半分まで入る。その隣が検証や
 テストのタイルだと、評価用の画素が学習に入る。この研究は一度テスト集合の
 汚染で結論が2つ覆っている（docs/実験のまとめ.md 8節）。
-そのため **allowed に学習集合のタイル番号だけを渡すこと**。
+そのため **allowed には「検証とテスト以外」を渡すこと**
+（`allowed_except(n_all, idx_val, idx_test)`）。背景タイルはどの分割にも
+属さないので入れてよい ── 入れると8近傍が揃うタイルが 0.2% → 8.7% に増える。
+**`allowed=None` は `OverlapDataset` が拒む**（全タイルを貼るので漏れる）。
 allowed に無い近傍は、評価時と同じく中央タイルの鏡像で埋める。
 
 使い方（ノートブックの cell 13 を差し替える）は
@@ -126,12 +129,21 @@ def _to_hwc(arr):
 
     dataset2 は (1,H,W) のテンソル、dataset3 は (H,W) や (H,W,3) の配列と
     形が混ざることがあるので、貼り合わせる前に必ずここを通す。
+
+    **面の数を決め打ちにしない。** 以前は `shape[0] in (1, 3)` で
+    CHW を判定していたので、**2面の入力（実建物の 建物・無壁舎）が
+    `(2,128,128)` のまま「128面の HWC」と読まれて落ちた**（`44`）。
+    タイルは正方形なので、**後ろ2つが等しくて先頭が違えば CHW** である。
     """
     a = np.asarray(arr)
     if a.ndim == 2:
         return a[:, :, None], "hw"
-    if a.ndim == 3 and a.shape[0] in (1, 3) and a.shape[0] != a.shape[-1]:
-        return np.transpose(a, (1, 2, 0)), "chw"     # CHW -> HWC
+    if a.ndim == 3:
+        if a.shape[1] == a.shape[2] and a.shape[0] != a.shape[1]:
+            return np.transpose(a, (1, 2, 0)), "chw"     # CHW -> HWC
+        # 念のため旧規則も残す（正方形でない面が来た場合）
+        if a.shape[0] in (1, 3) and a.shape[0] != a.shape[-1]:
+            return np.transpose(a, (1, 2, 0)), "chw"
     return a, "hwc"
 
 
@@ -153,8 +165,10 @@ class OverlapDataset:
       dem/air/mask  データセット全体の配列（分割前）。添字は dataset2 の並び
       geoinfo       同上
       indices       この分割に属するタイルの添字（学習なら学習集合）
-      allowed       貼ってよい近傍の添字。**学習では indices と同じものを渡す**
-                    （None にすると全タイルを貼るので分割をまたぐ漏れが起きる）
+      allowed       貼ってよい近傍の添字。**検証とテスト以外**を渡す
+                    （`allowed_except(n_all, idx_val, idx_test)`。背景タイルは
+                    どの分割にも属さないので入れてよい）。
+                    **None は拒む** ── 全タイルを貼るので分割をまたいで漏れる
       max_shift     ずらす幅の上限 [画素]。0 で従来どおり（ずらさない）
       transform     既存の JointTransform。ずらしたあとに掛かる
       deterministic True で中央固定。検証・テスト用
@@ -163,14 +177,31 @@ class OverlapDataset:
     **土地利用も地形と同じ窓で切り出す。** ずらした先の土地利用が来ないと
     入力どうしの位置が食い違う。one-hot はここで展開する
     （pkl には区分番号1chで入っている）。
+
+    third は土地利用**以外**の3入力目（建物の被覆率など）。
+    `[C, H, W]` の uint8 をそのまま渡すと、同じ窓で切り出して /255 する
+    （航空写真と同じ扱い）。`landuse` との同時指定はできない。
     """
 
     def __init__(self, dem, air, mask, geoinfo, indices, allowed,
                  max_shift=64, tile=128, transform=None, deterministic=False,
-                 seed=42, landuse=None):
+                 seed=42, landuse=None, third=None):
         self.dem, self.air, self.mask = dem, air, mask
         # 3入力目（土地利用の区分番号）。None なら2入力のまま
         self.landuse = landuse
+        # 3入力目（土地利用以外）。被覆率などを素のまま持つ
+        self.third = third
+        if landuse is not None and third is not None:
+            raise ValueError("landuse と third は同時に渡せません")
+        # **歯止めは渡す側ではなく受ける側に置く**（設計書 §3）。
+        # `build_loaders` の assert は `allowed_except` の結果をその入力と
+        # 比べているだけで必ず通る（レビュー 4）。本当に危ないのは
+        # `allowed=None` で、そのとき検証・テストのタイルが近傍に入る。
+        if allowed is None:
+            raise ValueError(
+                "allowed=None は渡せません。全タイルを近傍に貼るので"
+                "検証・テストの画素が学習に入ります（CLAUDE.md の 4）。"
+                " allowed_except(n_all, idx_val, idx_test) を渡してください。")
         self.idx = [int(i) for i in indices]
         self.tile = int(tile)
         self.max_shift = int(max_shift)
@@ -198,6 +229,7 @@ class OverlapDataset:
             air = np.asarray(self.air[k])
             msk = np.asarray(self.mask[k])
             lu = None if self.landuse is None else np.asarray(self.landuse[k])
+            th = None if self.third is None else np.asarray(self.third[k])
         else:
             # 元が CHW だったかを覚えておき、切り出したあとで戻す
             _, dem_kind = _to_hwc(self.dem[k])
@@ -211,6 +243,10 @@ class OverlapDataset:
                 # 入力どうしの位置が食い違う
                 _, lu_kind = _to_hwc(self.landuse[k])
                 planes["lu"] = self._plane(self.landuse)
+            if self.third is not None:
+                # 同じ理由で、3入力目も地形と同じ窓で切る
+                _, th_kind = _to_hwc(self.third[k])
+                planes["th"] = self._plane(self.third)
             big = self.mos.build(k, planes)
             dy, dx = self._sample_shift(k)
             r, c = T + dy, T + dx
@@ -219,6 +255,8 @@ class OverlapDataset:
             msk = _from_hwc(big["mask"][r:r + T, c:c + T], msk_kind)
             lu = (None if self.landuse is None
                   else _from_hwc(big["lu"][r:r + T, c:c + T], lu_kind))
+            th = (None if self.third is None
+                  else _from_hwc(big["th"][r:r + T, c:c + T], th_kind))
 
         dem = torch.as_tensor(np.ascontiguousarray(dem)).float()
         air = torch.as_tensor(np.ascontiguousarray(air)).float() / 255.0
@@ -231,6 +269,11 @@ class OverlapDataset:
             air = air.permute(2, 0, 1)
         if self.transform:
             dem, air, msk = self.transform(dem, air, msk)
+        if th is not None:
+            t = torch.as_tensor(np.ascontiguousarray(th)).float() / 255.0
+            if t.ndim == 2:
+                t = t.unsqueeze(0)
+            return (dem, air, t), msk
         if lu is None:
             return (dem, air), msk
         from . import landuse as _lu

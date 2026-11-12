@@ -17,6 +17,12 @@ inputs:
 augment: false
 bg_ratio: 0.0
 status: active
+# 学習した手順の世代。詳しくは docs/設計図_修正案.md の 6
+protocol: v2-config
+# 和集合（アンサンブル）に入れてよいか
+ensemble: true
+# torch.manual_seed を呼んで学習したか
+seeded: true
 label: FCN-8s SAM+APM
 note: 'アーキテクチャの族の比較（PSPNet / DeepLabv3 / SegFormer と並べる）。符号化器は MultiEncoderUNet と同一の2本のVGG風（64/128/256/512）にしてあり、違いは頭（デコーダ）だけ。こうしないと符号化器の違いと復号のしかたの違いが混ざる。FCN
   は転置畳み込みの積み上げもスキップの連結もせず、各段のスコアを足すだけで出力にする。元論文の FCN-8s は s32/s16/s8 の3段を足すが、本研究の符号化器は

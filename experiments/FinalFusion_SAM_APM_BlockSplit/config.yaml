@@ -17,6 +17,17 @@ inputs:
 augment: false
 bg_ratio: 0.0
 status: active
+# 学習した手順の世代。詳しくは docs/設計図_修正案.md の 6
+protocol: v1-blocksplit
+# 和集合（アンサンブル）に入れてよいか
+ensemble: false
+# **分割は乱数ではない。** ここを書かないと splits.resolve が黙って random に
+# 落ち、build_loaders が学習時と違う分割（8,889/2,963/2,964）を作る
+# （2026-11-08 に発覚。docs/レビュー_2026-11-08.md の 7.1）。
+# 表は splits/hiroshima_block_20km.csv（8,914 / 2,229 / 3,673）。
+split: {kind: csv, file: hiroshima_block_20km}
+# torch.manual_seed を呼んで学習したか
+seeded: false
 label: Final SAM+APM ブロック分割
 note: '空間ブロック分割（第6章 6.2 / リサーチマップ C）。構造・損失・学習率・seed は FinalFusion_SAM_APM と完全に同一で、**分割だけが違う**。
   既存のタイル単位の無作為分割では、テスト 2,964 枚のうち 2,838 枚（95.7%）が学習タイルと接しており、報告値は「未知の地域への汎化」ではなく「同一地域内での精度」である。

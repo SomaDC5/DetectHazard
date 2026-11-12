@@ -15,6 +15,12 @@ inputs:
 augment: false
 bg_ratio: 0.0
 status: active
+# 学習した手順の世代。詳しくは docs/設計図_修正案.md の 6
+protocol: v2-config
+# 和集合（アンサンブル）に入れてよいか
+ensemble: true
+# torch.manual_seed を呼んで学習したか
+seeded: false
 label: Final SAM+APM 損失 a0.85/b0.15
 note: "損失を再現率側に振った版（FocalTversky alpha=0.85/beta=0.15）。手順0の片側。結果は 展望_再現率をどう上げるか.md 11節 — 面積R は +0.0307 動くが箇所R は +0.0078 だけで、WNet の1段目候補にはならなかった。"
 dataset:

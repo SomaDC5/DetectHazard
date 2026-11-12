@@ -1,0 +1,20 @@
+{
+ "condition": "Union_union6",
+ "eval_id": "Union_union6__lab-windows__20261031-121415__shimane__all__x-02600b__inst__cov_gt-0.5--cov_pred-0.3-ca4173",
+ "evaluated_at": "2026-10-31T12:14:15",
+ "f1": 0.86202,
+ "machine": "lab-windows",
+ "members": "FinalFusion_SAM_APM_OverlapTrain|FinalFusion_DEM_APM_OverlapTrain|FinalFusion_SAM_APM_LU_OverlapTrain|FinalFusion_SAM_APM_BVB_OverlapTrain|FinalFusion_SAM_APM_BLD_OverlapTrain|FinalFusion_SAM_APM_BLD_seed2_OverlapTrain",
+ "metric_kind": "箇所",
+ "n_gt_instances": 27445,
+ "n_members": 6,
+ "n_pred_instances": 43726,
+ "note": "和集合そのもの（刈り取り前）。構成員 6本。床 3,204件 / 11.67%、天井 88.33%。正解のかたまり 27,445 / 予測 43,726。出どころ union_blind__shimane__union6.csv / analysis/run_union_blind.py",
+ "precision": 1.0,
+ "recall": 0.7575,
+ "region": "shimane",
+ "run_id": "Union_union6__lab-windows__20261031-121415",
+ "scope": "和集合上限",
+ "setting": "被覆 (cov_gt=0.5, cov_pred=0.3)",
+ "tileset": "全件"
+}

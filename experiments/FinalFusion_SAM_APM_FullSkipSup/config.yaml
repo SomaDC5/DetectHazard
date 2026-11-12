@@ -15,6 +15,12 @@ inputs:
 augment: false
 bg_ratio: 0.0
 status: active
+# 学習した手順の世代。詳しくは docs/設計図_修正案.md の 6
+protocol: v2-config
+# 和集合（アンサンブル）に入れてよいか
+ensemble: true
+# torch.manual_seed を呼んで学習したか
+seeded: true
 label: ''
 note: 全スケール結合 + ブランチ別の深層監督と変調（SupAttnPB と同じ機構）。bg_ratio=0 版。段階2
 dataset:

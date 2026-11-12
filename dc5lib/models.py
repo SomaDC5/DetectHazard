@@ -2055,14 +2055,22 @@ def build_model_for(cond):
     (1,2,3) なので、ここを分けないと監督なしの条件に補助ヘッドが生えてしまう。
 
         cond は条件名でも Condition でもよい。
+
+    **3入力目のチャネル数も config から渡す。** `TripleEncoderUNet` の既定は
+    9（土地利用の one-hot）なので、建物のように 2〜3チャネルのものを
+    渡し忘れると load_state_dict が落ちる。
     """
     from .losses import aux_lambda, aux_stages, use_aspp
-    arch = cond if isinstance(cond, str) else cond.arch
+    c = cond
     if isinstance(cond, str):
         from .registry import get
-        arch = get(cond).arch
+        c = get(cond)
     stages = aux_stages(cond) if aux_lambda(cond) > 0 else ()
-    return build_model(arch, aux_stages=stages, use_aspp=use_aspp(cond))
+    kw = dict(aux_stages=stages, use_aspp=use_aspp(cond))
+    ch = getattr(c, "in_channels", None)
+    if ch and len(ch) >= 3:
+        kw["third_channels"] = ch[2]
+    return build_model(c.arch, **kw)
 
 
 def load_weights(model, checkpoint_path, device="cpu"):
@@ -2073,7 +2081,9 @@ def load_weights(model, checkpoint_path, device="cpu"):
     """
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     state = ckpt.get("model_state_dict", ckpt) if isinstance(ckpt, dict) else ckpt
-    missing, unexpected = model.load_state_dict(state, strict=True), None
+    # `strict=True` なので足りない鍵があれば例外になる。
+    # 返りの NamedTuple は空なので受け取らない（5回目のレビュー 6）。
+    model.load_state_dict(state, strict=True)
     meta = {}
     if isinstance(ckpt, dict):
         for k in ("epoch", "best_f1_score"):
