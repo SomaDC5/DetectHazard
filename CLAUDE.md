@@ -91,6 +91,9 @@ python tools/audit_splits.py --region both
   Write ツールでファイルに書いてから走らせるか `chr(10)` を使う
 - **config を触る作業中に長い実験を走らせない**（走っているプロセスが
   新しいキーを読めず落ちる）
+- **numpy の行列積が落ちる**（`0xc06d007f`・出力なしの 127）。
+  `sklearn` の `KMeans` も `scipy` の `kmeans2` も `@` も使えない。
+  **線形代数は torch で書く**（実装書 `1`）
 
 ## 上げてはいけないもの
 
